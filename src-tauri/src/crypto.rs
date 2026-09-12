@@ -10,7 +10,7 @@
 //!
 //! Key sources, in priority order (the chosen one is recorded in the file so we
 //! decrypt with the same one):
-//!   1. `PUREPRIVACY_SECRETS_KEY` env var (base64 of 32 bytes) — for headless /
+//!   1. `PRIVACY_LODGE_SECRETS_KEY` env var (base64 of 32 bytes) — for headless /
 //!      CI / container boxes with no desktop keychain session.
 //!   2. OS keychain via `keyring` (macOS Keychain, Windows Credential Manager,
 //!      Linux secret-service) — the default for a desktop install.
@@ -25,9 +25,16 @@ use rand::RngCore;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
 
-const KEYRING_SERVICE: &str = "ai.tournesol.pureprivacy";
+const KEYRING_SERVICE: &str = "ai.tournesol.privacylodge";
+/// Pre-rename keychain service. A native box that stored its master key under the old name
+/// must keep finding it: reads fall back to this, and the key is re-stored under the new name.
+const KEYRING_SERVICE_LEGACY: &str = "ai.tournesol.pureprivacy";
 const KEYRING_ACCOUNT: &str = "secrets-master-key";
-const ENV_KEY: &str = "PUREPRIVACY_SECRETS_KEY";
+const ENV_KEY: &str = "PRIVACY_LODGE_SECRETS_KEY";
+/// FROZEN across the rename ON PURPOSE. This is not a name — it is the SHA-256 *input* that
+/// derives the constant fallback key. Changing a single byte changes the key, and every box
+/// whose secrets.json was sealed with the fallback (no env key, no keychain) would become
+/// undecryptable. It may only ever change together with a key-migration step.
 const FALLBACK_MATERIAL: &[u8] = b"ai.tournesol.pureprivacy/secrets-fallback-v2";
 const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
@@ -70,16 +77,25 @@ fn decode_key(s: &str) -> Option<[u8; 32]> {
 }
 
 fn env_key() -> Option<[u8; 32]> {
-    decode_key(&std::env::var(ENV_KEY).ok()?)
+    // PRIVACY_LODGE_SECRETS_KEY, falling back to the pre-rename PRIVACY_LODGE_SECRETS_KEY.
+    decode_key(&crate::envcompat::var("SECRETS_KEY").ok()?)
 }
 
 fn keychain_entry() -> Option<keyring::Entry> {
     keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT).ok()
 }
 
-/// Read the keychain-held master key, if one exists.
+fn legacy_keychain_entry() -> Option<keyring::Entry> {
+    keyring::Entry::new(KEYRING_SERVICE_LEGACY, KEYRING_ACCOUNT).ok()
+}
+
+/// Read the keychain-held master key, if one exists — under the new service name first, then
+/// the pre-rename one (a box that ran before 0.2.0 stored it there).
 fn keychain_get() -> Option<[u8; 32]> {
-    decode_key(&keychain_entry()?.get_password().ok()?)
+    if let Some(k) = decode_key(&keychain_entry()?.get_password().ok()?) {
+        return Some(k);
+    }
+    decode_key(&legacy_keychain_entry()?.get_password().ok()?)
 }
 
 /// Read the keychain master key, creating + storing a fresh random one the first
@@ -89,6 +105,14 @@ fn keychain_get_or_create() -> Option<[u8; 32]> {
     match entry.get_password() {
         Ok(s) => decode_key(&s),
         Err(keyring::Error::NoEntry) => {
+            // Rename (0.2.0): a key stored under the old service name is adopted — copied to
+            // the new name (the old entry is left in place) so the box keeps its secrets.
+            if let Some(s) = legacy_keychain_entry().and_then(|e| e.get_password().ok()) {
+                if let Some(k) = decode_key(&s) {
+                    let _ = entry.set_password(&s);
+                    return Some(k);
+                }
+            }
             let mut k = [0u8; 32];
             rand::thread_rng().fill_bytes(&mut k);
             let stored = entry.set_password(&B64.encode(k));
@@ -125,7 +149,7 @@ pub fn key_for_encrypt() -> ([u8; 32], KeySource) {
         return (k, KeySource::Keychain);
     }
     eprintln!(
-        "[pp][crypto] WARNING: no {ENV_KEY} and no OS keychain — secrets.json is \
+        "[privacy-lodge][crypto] WARNING: no {ENV_KEY} and no OS keychain — secrets.json is \
          encrypted with a constant fallback key (obfuscation only, NOT secure at \
          rest). Set {ENV_KEY} (base64 of 32 bytes) or run with a desktop keychain."
     );
@@ -144,7 +168,7 @@ pub fn key_for_decrypt(source: KeySource) -> Result<[u8; 32], String> {
 }
 
 /// AES-256-GCM seal raw bytes; returns nonce ‖ ciphertext‖tag. The byte-level primitive
-/// under [`encrypt`]/[`decrypt`] — public so `pp-crypt` (the CLI that encrypts `pp-box`
+/// under [`encrypt`]/[`decrypt`] — public so `pl-crypt` (the CLI that encrypts `pl-box`
 /// backup bundles) is running THIS code, not a re-implementation that could drift.
 pub fn seal_bytes(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));

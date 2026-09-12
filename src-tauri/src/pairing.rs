@@ -1,5 +1,5 @@
 //! Federation pairing: the QR-exchanged "pair codes" + the allowlist of peers
-//! we federate with. This is PurePrivacy's "only talk to boxes you've paired
+//! we federate with. This is Privacy Lodge's "only talk to boxes you've paired
 //! with" model.
 //!
 //! tuwunel has no federation allowlist of its own (only a global on/off + a
@@ -81,7 +81,7 @@ pub fn load(data_dir: &std::path::Path) -> Pairings {
             // (atomic write, below) so this state should not arise in practice.
             // Loudly note it so a corrupt store is visible in logs.
             eprintln!(
-                "[pureprivacy] WARNING: pairings.json failed to parse — treating as empty for this read"
+                "[privacy-lodge] WARNING: pairings.json failed to parse — treating as empty for this read"
             );
             Pairings::default()
         }

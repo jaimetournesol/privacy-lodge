@@ -3,7 +3,7 @@
 //! Backs up the part of a box that CANNOT be recreated — its **onion private key**, admin
 //! credentials, and pairings (~1.5 KB total). The 346 MB homeserver DB (rooms + message
 //! history) is deliberately NOT included: it's bulk, it's already replicated on the owner's
-//! phones, and `pp-box backup` tars the whole volume for anyone who wants it.
+//! phones, and `pl-box backup` tars the whole volume for anyone who wants it.
 //!
 //! SECURITY: whoever holds an unencrypted backup can *impersonate the box* to all of the
 //! owner's contacts. So the blob is only ever produced encrypted: AES-256-GCM under a key
@@ -12,7 +12,7 @@
 //!
 //! The payload carries the secrets in the CLEAR *inside* the encrypted envelope (rather than
 //! copying the already-encrypted `secrets.json`), so a restore doesn't also need the original
-//! box's `PP_SECRETS_KEY` — the restoring box re-encrypts them under its own key. That makes a
+//! box's `PL_SECRETS_KEY` — the restoring box re-encrypts them under its own key. That makes a
 //! backup self-contained, which is the whole point when the original machine is gone.
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
@@ -119,7 +119,7 @@ pub fn create(app: &AppHandle, passphrase: &str) -> Result<String, String> {
 #[allow(dead_code)] // used by the restore path (setup page)
 pub fn open(envelope_json: &str, passphrase: &str) -> Result<serde_json::Value, String> {
     let env: serde_json::Value =
-        serde_json::from_str(envelope_json).map_err(|_| "That doesn't look like a PurePrivacy backup file.".to_string())?;
+        serde_json::from_str(envelope_json).map_err(|_| "That doesn't look like a Privacy Lodge backup file.".to_string())?;
     let v = env.get("v").and_then(|x| x.as_u64()).unwrap_or(0);
     if v != FORMAT_VERSION as u64 {
         return Err(format!("Unsupported backup format (v{v})."));
@@ -191,7 +191,7 @@ pub fn restore(app: &AppHandle, envelope_json: &str, passphrase: &str) -> Result
         .unwrap_or_default();
 
     // Secrets go back into state and are re-encrypted under THIS box's key by persist(), so the
-    // original machine's PP_SECRETS_KEY is never needed.
+    // original machine's PL_SECRETS_KEY is never needed.
     state::update(app, |i| {
         i.box_name = s("box_name");
         i.username = s("username");
@@ -215,7 +215,7 @@ pub fn restore(app: &AppHandle, envelope_json: &str, passphrase: &str) -> Result
             }
         }
     }
-    eprintln!("[pureprivacy] restored identity for {hostname}");
+    eprintln!("[privacy-lodge] restored identity for {hostname}");
     Ok(())
 }
 

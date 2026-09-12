@@ -16,7 +16,7 @@
 use base64::Engine;
 use sha2::{Digest, Sha256};
 
-/// Raw ed25519 public key (32 bytes, hex) of the PurePrivacy release signing key. The private
+/// Raw ed25519 public key (32 bytes, hex) of the Privacy Lodge release signing key. The private
 /// half lives ONLY in `_special-project/pureprivacy/pp-update-key.pem` — never in this repo, a
 /// box, or a backup. Rotating it is deliberately a code change + a release.
 pub const UPDATE_PUBKEY_HEX: &str =
@@ -26,7 +26,7 @@ pub const UPDATE_PUBKEY_HEX: &str =
 /// Shor's algorithm breaks Ed25519 outright, and an adversary who forges an update signature
 /// doesn't read one conversation — they push a malicious box to every user. So a manifest must
 /// carry BOTH signatures and satisfy BOTH: we only lose if ed25519 AND a hash-based scheme fall
-/// together. Filled in by `pp-sign keygen`; empty disables the PQ requirement (see below).
+/// together. Filled in by `pl-sign keygen`; empty disables the PQ requirement (see below).
 pub const UPDATE_PQ_PUBKEY_HEX: &str =
     "b8bf68eb03c2418e93d363e8ce6cb08bfabf3988a19d338fa5be80043c539b1d";
 
@@ -43,21 +43,21 @@ pub const REQUIRE_PQ_SIGNATURE: bool = !UPDATE_PQ_PUBKEY_HEX.is_empty();
 /// Where the signed manifest lives. `latest/download/<asset>` always resolves to the newest
 /// published release, so the box needs no API token and no release enumeration.
 const MANIFEST_URL: &str =
-    "https://github.com/jaimetournesol/pureprivacy-desktop/releases/latest/download/update.json";
+    "https://github.com/jaimetournesol/privacy-lodge/releases/latest/download/update.json";
 const SIGNATURE_URL: &str =
-    "https://github.com/jaimetournesol/pureprivacy-desktop/releases/latest/download/update.json.sig";
+    "https://github.com/jaimetournesol/privacy-lodge/releases/latest/download/update.json.sig";
 /// SLH-DSA signature over the same bytes (feature K). Required when [`REQUIRE_PQ_SIGNATURE`].
 const PQ_SIGNATURE_URL: &str =
-    "https://github.com/jaimetournesol/pureprivacy-desktop/releases/latest/download/update.json.pqsig";
+    "https://github.com/jaimetournesol/privacy-lodge/releases/latest/download/update.json.pqsig";
 
 /// Where a user goes when their platform has no self-installable build in the manifest.
-pub const RELEASES_PAGE: &str = "https://github.com/jaimetournesol/pureprivacy-desktop/releases/latest";
+pub const RELEASES_PAGE: &str = "https://github.com/jaimetournesol/privacy-lodge/releases/latest";
 
 /// We publish installers for Linux only, because the box's essential sidecars (tuwunel, the
 /// homeserver, and lk-jwt) have linux-gnu builds ONLY. Anywhere else, the supported way to run
 /// a box is Docker — so an unsupported-platform box is diverted there rather than sent to a
 /// releases page that has nothing it can use.
-pub const DOCKER_IMAGE: &str = "jaimemelon/pureprivacy-box:latest";
+pub const DOCKER_IMAGE: &str = "jaimemelon/privacy-lodge-box:latest";
 
 /// The command that moves a box onto the supported (Docker) path on an OS we don't build for.
 pub fn docker_migrate_command() -> String {
@@ -81,7 +81,7 @@ impl InstallKind {
     pub fn detect() -> Self {
         // Both are set by our own image; /.dockerenv is the generic container marker.
         if std::path::Path::new("/.dockerenv").exists()
-            || std::env::var("PUREPRIVACY_BIN_DIR").as_deref() == Ok("/opt/pureprivacy/bin")
+            || matches!(crate::envcompat::var("BIN_DIR").as_deref(), Ok("/opt/privacy-lodge/bin") | Ok("/opt/pureprivacy/bin"))
         {
             InstallKind::Docker
         } else {
@@ -159,7 +159,7 @@ pub fn verify_pq_signature(payload: &[u8], sig_b64: &str) -> Result<(), String> 
     if pk.verify(payload, &sig, &[]) {
         Ok(())
     } else {
-        Err("post-quantum signature does not match the PurePrivacy release key".into())
+        Err("post-quantum signature does not match the Privacy Lodge release key".into())
     }
 }
 
@@ -187,7 +187,7 @@ pub fn verify_signature(payload: &[u8], sig_b64: &str) -> Result<(), String> {
         .try_into()
         .map_err(|_| "signature isn't 64 bytes")?;
     key.verify(payload, &Signature::from_bytes(&sig_bytes))
-        .map_err(|_| "signature does not match the PurePrivacy release key".to_string())
+        .map_err(|_| "signature does not match the Privacy Lodge release key".to_string())
 }
 
 fn hex_to_32(s: &str) -> Option<[u8; 32]> {
@@ -353,6 +353,8 @@ pub async fn install_native(m: &Manifest, socks_port: u16) -> Result<std::path::
     }
 
     // Stage next to the current binary (same filesystem ⇒ rename is atomic), then swap.
+    // These two filenames deliberately keep the pre-rename spelling: the 0.1.x binary that
+    // installs 0.2.0 writes `pureprivacy.prev`, and the rollback path must find it afterwards.
     let staged = dir.join("pureprivacy.update-staged");
     std::fs::write(&staged, &bytes).map_err(|e| format!("couldn't write the update: {e}"))?;
     set_executable(&staged)?;
@@ -386,16 +388,16 @@ fn hex_lower(bytes: &[u8]) -> String {
 /// this itself by design (no Docker socket), so we hand over a copyable command instead.
 ///
 /// It names the VERSION and nothing else. The install — not the box — knows which registry
-/// image and which tag it runs (`PP_IMAGE` in `.env`), whether the agents add-on is on, and
-/// therefore what to pull: `pp-box update <ver>` pulls exactly those tags, pins them in
+/// image and which tag it runs (`PL_IMAGE` in `.env`), whether the agents add-on is on, and
+/// therefore what to pull: `pl-box update <ver>` pulls exactly those tags, pins them in
 /// `.env`, and recreates on the same volume. The earlier shape, `docker pull <image> && … &&
-/// ./pp-box update`, never updated a Docker-Hub box at all: compose kept running the tag
+/// ./pl-box update`, never updated a Docker-Hub box at all: compose kept running the tag
 /// `.env` named (a versioned pull doesn't retag `:latest`; `up` doesn't re-pull an image it
-/// has), and `pp-box update` then died in `build.sh` looking for a Tauri build. The manifest's
+/// has), and `pl-box update` then died in `build.sh` looking for a Tauri build. The manifest's
 /// `docker.image` / `docker.agent_image` remain the signed statement of which images belong
 /// to this release; the tags they carry equal `version` by construction (sign-release.sh).
 pub fn docker_command(m: &Manifest) -> String {
-    format!("cd docker && ./pp-box update {}", m.version)
+    format!("cd docker && ./pl-box update {}", m.version)
 }
 
 #[cfg(test)]
@@ -498,8 +500,8 @@ mod tests {
         )
         .unwrap();
         let cmd = docker_command(&m);
-        // The version is the whole payload: pp-box resolves image + tag from its own .env.
-        assert!(cmd.contains("pp-box update 0.1.3"), "{cmd}");
+        // The version is the whole payload: pl-box resolves image + tag from its own .env.
+        assert!(cmd.contains("pl-box update 0.1.3"), "{cmd}");
         // No bare `docker pull`: it never reached a compose-run box and dies in build.sh.
         assert!(!cmd.contains("docker pull"), "{cmd}");
     }
@@ -507,7 +509,7 @@ mod tests {
     #[test]
     fn manifests_name_the_agent_image_and_the_command_names_only_the_version() {
         // docker.agent_image is the signed statement of which agent image belongs to the
-        // release. The command does NOT spell out images: pp-box pulls the agent only when
+        // release. The command does NOT spell out images: pl-box pulls the agent only when
         // the add-on is on, so a plain box never downloads it, and updating the box while the
         // agent stays behind (skew the owner never chose) can't happen — same version, both.
         let m: Manifest = serde_json::from_str(
@@ -518,7 +520,7 @@ mod tests {
             m.docker.as_ref().unwrap().agent_image.as_deref(),
             Some("jaimemelon/pureprivacy-agent:0.1.11")
         );
-        assert_eq!(docker_command(&m), "cd docker && ./pp-box update 0.1.11");
+        assert_eq!(docker_command(&m), "cd docker && ./pl-box update 0.1.11");
     }
 
     #[test]
@@ -530,7 +532,7 @@ mod tests {
         )
         .unwrap();
         assert!(m.docker.as_ref().unwrap().agent_image.is_none());
-        assert_eq!(docker_command(&m), "cd docker && ./pp-box update 0.1.10");
+        assert_eq!(docker_command(&m), "cd docker && ./pl-box update 0.1.10");
     }
 
     /// A NATIVE box whose platform has no build in the release must not be treated as Docker.

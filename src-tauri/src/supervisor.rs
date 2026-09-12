@@ -1,6 +1,6 @@
 //! Sidecar supervision via `tokio::process::Command` (deliberately NOT
 //! Tauri's externalBin: binaries are resolved at runtime from
-//! `<app_data_dir>/bin/{tuwunel,tor}` or a `$PUREPRIVACY_BIN_DIR` override).
+//! `<app_data_dir>/bin/{tuwunel,tor}` or a `$PRIVACY_LODGE_BIN_DIR` override).
 //!
 //! Cancellation model — the "generation" trick:
 //! Every start/stop bumps an atomic generation counter. Each supervision
@@ -110,7 +110,7 @@ async fn jittered_sleep(backoff: Duration) {
 // ---------------------------------------------------------------------------
 
 pub fn bin_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Ok(dir) = std::env::var("PUREPRIVACY_BIN_DIR") {
+    if let Ok(dir) = crate::envcompat::var("BIN_DIR") {
         if !dir.is_empty() {
             return Ok(PathBuf::from(dir));
         }
@@ -193,7 +193,7 @@ pub fn start_lifecycle(app: &AppHandle, admin_password: Option<String>) {
         tauri::async_runtime::spawn(async move {
             if let Err(err) = run_real(handle.clone(), gen, admin_password).await {
                 if !is_stale(&handle, gen) {
-                    eprintln!("[pureprivacy] setup failed: {err}");
+                    eprintln!("[privacy-lodge] setup failed: {err}");
                     state::update(&handle, |inner| {
                         inner.phase = Phase::Error;
                         inner.setup_stage = None;
@@ -261,7 +261,7 @@ pub fn reload_fedproxy(app: &AppHandle) {
             let ok2 = matches!(run_reload(), Ok(s) if s.success());
             if !ok2 {
                 eprintln!(
-                    "[pureprivacy] caddy reload failed (twice) — allowlist change will apply on next box start"
+                    "[privacy-lodge] caddy reload failed (twice) — allowlist change will apply on next box start"
                 );
             }
         }
@@ -347,7 +347,7 @@ fn reap_stale_lkjwt(port: u16) {
             let _ = std::process::Command::new("kill")
                 .args(["-9", &pid.to_string()])
                 .status();
-            eprintln!("[pp] reaped stale lk-jwt orphan pid {pid} on :{port}");
+            eprintln!("[privacy-lodge] reaped stale lk-jwt orphan pid {pid} on :{port}");
         }
     }
 }
@@ -378,7 +378,7 @@ async fn warm_peer_circuit(peer_onion: &str, log: bool) {
     // regardless of the peer's local PORT_OFFSET.
     let url = format!("https://{peer_onion}:8448/_matrix/federation/v1/version");
     if client.get(&url).send().await.is_ok() && log {
-        eprintln!("[pp] warmed Tor circuit to {peer_onion}");
+        eprintln!("[privacy-lodge] warmed Tor circuit to {peer_onion}");
     }
 }
 
@@ -477,7 +477,7 @@ async fn run_real(app: AppHandle, gen: u64, admin_password: Option<String>) -> R
     // blocks startup.
     if turn_present(&app) && !turn_secret.is_empty() {
         if let Err(e) = config::render_turnserver(&app, &onion, &turn_secret) {
-            eprintln!("[pureprivacy] voice config skipped: {e}");
+            eprintln!("[privacy-lodge] voice config skipped: {e}");
         } else {
             spawn_supervised(
                 app.clone(),
@@ -519,7 +519,7 @@ async fn run_real(app: AppHandle, gen: u64, admin_password: Option<String>) -> R
                 vec![],
                 Readiness::Tcp(FEDPROXY_PORT + off()),
             ),
-            Err(e) => eprintln!("[pureprivacy] federation proxy skipped: {e}"),
+            Err(e) => eprintln!("[privacy-lodge] federation proxy skipped: {e}"),
         }
     }
 
@@ -531,7 +531,7 @@ async fn run_real(app: AppHandle, gen: u64, admin_password: Option<String>) -> R
     // points at a site that exists.
     if voice {
         if livekit_api_key.is_empty() || livekit_api_secret.is_empty() {
-            eprintln!("[pureprivacy] group voice skipped: missing livekit api key/secret");
+            eprintln!("[privacy-lodge] group voice skipped: missing livekit api key/secret");
         } else if let Err(e) = config::render_livekit_yaml(
             &app,
             &livekit_api_key,
@@ -539,7 +539,7 @@ async fn run_real(app: AppHandle, gen: u64, admin_password: Option<String>) -> R
             &onion,
             &turn_secret,
         ) {
-            eprintln!("[pureprivacy] group voice skipped: {e}");
+            eprintln!("[privacy-lodge] group voice skipped: {e}");
         } else {
             // LiveKit SFU: TCP-only signaling + media on loopback.
             spawn_supervised(
@@ -627,7 +627,7 @@ async fn run_real(app: AppHandle, gen: u64, admin_password: Option<String>) -> R
         if !admin_created && !username.is_empty() && !join_token.is_empty() {
             match crate::account::create_admin(&username, &password, &join_token).await {
                 Ok(()) => {
-                    eprintln!("[pureprivacy] admin account @{username} ready");
+                    eprintln!("[privacy-lodge] admin account @{username} ready");
                     state::update(&app, |inner| inner.admin_created = true);
                     let _ = state::persist(&app);
                 }
@@ -695,21 +695,70 @@ async fn run_real(app: AppHandle, gen: u64, admin_password: Option<String>) -> R
     Ok(())
 }
 
+/// Rename (0.2.0): the box↔app account-data contract moved from `ai.tournesol.pureprivacy.*`
+/// to `ai.tournesol.privacylodge.*`. Both prefixes are kept: reads of the one blob whose absence
+/// is destructive (pairings — an empty read wipes the federation allowlist) fall back to the
+/// legacy key, and [`migrate_account_data`] copies every blob forward once at box start.
+pub(crate) const ACCOUNT_DATA_PREFIX: &str = "ai.tournesol.privacylodge.";
+pub(crate) const LEGACY_ACCOUNT_DATA_PREFIX: &str = "ai.tournesol.pureprivacy.";
+/// Every account-data type either side has ever written under the old prefix — the box's own
+/// seven, the agent registry + sessions (agent.rs), and the two the phone alone writes
+/// (`recovery`, `backup_room`). A fresh Privacy Bolt install reads the NEW keys only, so the
+/// phone-only ones must be carried forward here too.
+const MIGRATED_ACCOUNT_DATA: [&str; 11] = [
+    "pairings", "boxstatus", "command", "command_result", "backup", "update", "update_prefs",
+    "recovery", "backup_room", "agents", "agent_sessions",
+];
+
+/// Copy each account-data blob from the legacy key to the new key exactly once: only when the
+/// new key is absent and the old one present, and NEVER deleting the old one — a rollback to
+/// 0.1.x still finds its data. Idempotent; returns how many blobs were copied. Failures are
+/// transient (loopback homeserver not ready) and are simply retried at the next box start.
+async fn migrate_account_data(
+    client: &reqwest::Client,
+    ad_url: &(dyn Fn(&str) -> String + Sync),
+    token: &str,
+) -> usize {
+    let mut copied = 0;
+    for suffix in MIGRATED_ACCOUNT_DATA {
+        let new_url = ad_url(&format!("{ACCOUNT_DATA_PREFIX}{suffix}"));
+        if !matches!(get_account_data(client, &new_url, token).await, Ok(None)) {
+            continue; // already there (or unreadable right now) — never overwrite
+        }
+        let old_url = ad_url(&format!("{LEGACY_ACCOUNT_DATA_PREFIX}{suffix}"));
+        let Ok(Some(blob)) = get_account_data(client, &old_url, token).await else {
+            continue;
+        };
+        let ok = client
+            .put(&new_url)
+            .bearer_auth(token)
+            .json(&blob)
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false);
+        if ok {
+            copied += 1;
+        }
+    }
+    copied
+}
+
 /// Account-data event type the phone writes scanned-peer onions into.
-const PAIR_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.pureprivacy.pairings";
+const PAIR_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.privacylodge.pairings";
 /// Account-data the box PUBLISHES (read-only for the phone) — PP Config's live view.
-const BOXSTATUS_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.pureprivacy.boxstatus";
+const BOXSTATUS_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.privacylodge.boxstatus";
 /// Account-data the phone WRITES a command into; the box reads + executes it.
-const COMMAND_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.pureprivacy.command";
+const COMMAND_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.privacylodge.command";
 /// Account-data the box WRITES a command's outcome into; the phone reads it.
-const COMMAND_RESULT_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.pureprivacy.command_result";
+const COMMAND_RESULT_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.privacylodge.command_result";
 /// Account-data the box WRITES an encrypted identity backup into (feature D); phone saves it.
-const BACKUP_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.pureprivacy.backup";
+const BACKUP_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.privacylodge.backup";
 /// Account-data the box WRITES the update state into (feature H); PP Config renders it and the
 /// owner approves from there. Read-only for the phone — approval comes back as a guarded command.
-const UPDATE_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.pureprivacy.update";
+const UPDATE_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.privacylodge.update";
 /// Account-data the phone WRITES update preferences into (feature H): `{auto_check: bool}`.
-const UPDATE_PREFS_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.pureprivacy.update_prefs";
+const UPDATE_PREFS_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.privacylodge.update_prefs";
 /// How often a box with automatic checks on looks for a new release (over Tor).
 const UPDATE_CHECK_INTERVAL_MS: u64 = 24 * 60 * 60 * 1000;
 
@@ -764,9 +813,24 @@ async fn pair_fetch_onions(
     if r.status() == reqwest::StatusCode::UNAUTHORIZED {
         return Err(true);
     }
-    if r.status() == reqwest::StatusCode::NOT_FOUND {
-        return Ok(Vec::new()); // owner hasn't scanned anyone yet
-    }
+    let r = if r.status() == reqwest::StatusCode::NOT_FOUND {
+        // Rename (0.2.0): before the startup copy-forward has run (or if it failed), the new
+        // key is absent while the pairings still sit under the legacy key. Reading "none"
+        // here would WIPE the allowlist (see guard #1 below) — so look there before concluding.
+        let legacy = format!(
+            "{base}/_matrix/client/v3/user/{enc}/account_data/{LEGACY_ACCOUNT_DATA_PREFIX}pairings"
+        );
+        let r2 = client.get(legacy).bearer_auth(token).send().await.map_err(|_| false)?;
+        if r2.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(true);
+        }
+        if r2.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new()); // owner hasn't scanned anyone yet
+        }
+        r2
+    } else {
+        r
+    };
     if !r.status().is_success() {
         return Err(false);
     }
@@ -850,7 +914,7 @@ pub(crate) async fn pair_remove_onion_from_account_data(
             .await;
         match put {
             Ok(r) if r.status().is_success() => {
-                eprintln!("[pureprivacy] pairing remove: dropped {target} from account-data");
+                eprintln!("[privacy-lodge] pairing remove: dropped {target} from account-data");
                 return Ok(());
             }
             _ => {
@@ -933,7 +997,7 @@ pub(crate) async fn pair_add_onion_to_account_data(
             .await;
         match put {
             Ok(r) if r.status().is_success() => {
-                eprintln!("[pureprivacy] pairing accept: recorded {target} in account-data");
+                eprintln!("[privacy-lodge] pairing accept: recorded {target} in account-data");
                 return Ok(());
             }
             _ => {
@@ -1019,7 +1083,7 @@ async fn run_update_check(
     let (found, error) = match crate::updater::check(SOCKS_PORT + off()).await {
         Ok(m) => (m, None),
         Err(e) => {
-            eprintln!("[pureprivacy] update check failed: {e}");
+            eprintln!("[privacy-lodge] update check failed: {e}");
             (None, Some(e))
         }
     };
@@ -1061,7 +1125,7 @@ async fn run_update_check(
                 // phone says "run your box under Docker instead", not "download an update".
                 "unsupported_os": !is_docker && !self_install,
                 // The release's images, straight from the SIGNED manifest, so a Docker owner
-                // (or PP Config) can see what `pp-box update <ver>` will land on. Optional on
+                // (or PP Config) can see what `pl-box update <ver>` will land on. Optional on
                 // both ends: manifests before 0.1.11 have no agent_image, and the phone shows
                 // these only when present.
                 "docker_image": m.docker.as_ref().map(|d| d.image.clone()).unwrap_or_default(),
@@ -1130,15 +1194,15 @@ async fn execute_update(
             // We build boxes for Linux only (the homeserver has no other target), so the
             // honest answer here is "move to Docker", not "go find a download".
             Err(format!(
-                "PurePrivacy doesn't publish a box for {} — run your box under Docker instead: {}",
+                "Privacy Lodge doesn't publish a box for {} — run your box under Docker instead: {}",
                 crate::updater::native_target(),
                 crate::updater::docker_migrate_command()
             ))
         }
         crate::updater::InstallKind::Native => {
-            eprintln!("[pureprivacy] update: installing {} (owner-approved)", m.version);
+            eprintln!("[privacy-lodge] update: installing {} (owner-approved)", m.version);
             let path = crate::updater::install_native(m, SOCKS_PORT + off()).await?;
-            eprintln!("[pureprivacy] update: installed to {} — restarting", path.display());
+            eprintln!("[privacy-lodge] update: installed to {} — restarting", path.display());
             // Swapping the file is NOT enough: the version is compiled into the RUNNING
             // process, so without re-executing we'd keep running the old (possibly vulnerable)
             // build while telling the owner they're patched. Restart the sidecars, then exec
@@ -1153,15 +1217,15 @@ async fn execute_update(
                 let args: Vec<String> = std::env::args().skip(1).collect();
                 match std::process::Command::new(&path).args(&args).spawn() {
                     Ok(_) => {
-                        eprintln!("[pureprivacy] update: re-executing into {ver}");
+                        eprintln!("[privacy-lodge] update: re-executing into {ver}");
                         std::process::exit(0);
                     }
                     // Couldn't hand over — leave the box running the OLD build rather than
                     // dead, and say so. pureprivacy.prev holds the previous binary either way.
                     Err(e) => {
                         eprintln!(
-                            "[pureprivacy] update: installed but couldn't restart into it ({e}) \
-                             — quit and reopen PurePrivacy to finish"
+                            "[privacy-lodge] update: installed but couldn't restart into it ({e}) \
+                             — quit and reopen Privacy Lodge to finish"
                         );
                         start_lifecycle(&app2, None);
                     }
@@ -1175,12 +1239,12 @@ async fn execute_update(
 fn execute_command(app: &AppHandle, action: &str) {
     match action {
         "restart" => {
-            eprintln!("[pureprivacy] box config: restart requested by the phone");
+            eprintln!("[privacy-lodge] box config: restart requested by the phone");
             stop_lifecycle(app);
             start_lifecycle(app, None);
         }
         "reset" => {
-            eprintln!("[pureprivacy] box config: FACTORY RESET requested by the phone");
+            eprintln!("[privacy-lodge] box config: FACTORY RESET requested by the phone");
             let _ = crate::commands::reset_box(app.clone());
         }
         _ => {}
@@ -1262,13 +1326,13 @@ async fn run_box_config(app: AppHandle, gen: u64) {
             )
             .await;
 
-            // OPERATOR TOOL, OFF BY DEFAULT. Set PP_SWEEP_DEAD_ROOMS=1 to have the box clear
+            // OPERATOR TOOL, OFF BY DEFAULT. Set PL_SWEEP_DEAD_ROOMS=1 to have the box clear
             // rooms that cannot be a live conversation: ones with nobody else in them, and
             // one-to-ones with an agent that no longer exists. Deliberately NOT automatic —
             // it leaves rooms on the owner's behalf, and a box should not quietly delete
             // things from someone's chat list because a heuristic said so. Runs once per
             // process, after the republish so the roster it checks against is current.
-            if std::env::var("PP_SWEEP_DEAD_ROOMS").ok().as_deref() == Some("1") {
+            if std::env::var("PL_SWEEP_DEAD_ROOMS").ok().as_deref() == Some("1") {
                 use std::sync::atomic::{AtomicBool, Ordering};
                 static SWEPT: AtomicBool = AtomicBool::new(false);
                 if !SWEPT.swap(true, Ordering::Relaxed) {
@@ -1281,7 +1345,7 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                         &user_id,
                     )
                     .await;
-                    eprintln!("[pureprivacy] agents: dead-room sweep cleared {n} room(s)");
+                    eprintln!("[privacy-lodge] agents: dead-room sweep cleared {n} room(s)");
                 }
             }
 
@@ -1290,6 +1354,19 @@ async fn run_box_config(app: AppHandle, gen: u64) {
             // member state, and nothing creates a dead room while the box is running (agent
             // removal cleans up its own). Runs after the republish so the roster it checks
             // against is current — otherwise a live agent could look unknown and lose its room.
+            // Rename (0.2.0): carry every account-data blob forward from the legacy keys ONCE,
+            // before the sweep and the update check below read the new keys.
+            {
+                use std::sync::atomic::{AtomicBool, Ordering};
+                static MIGRATED: AtomicBool = AtomicBool::new(false);
+                if !MIGRATED.swap(true, Ordering::Relaxed) {
+                    let n = migrate_account_data(&client, &ad_url, &t).await;
+                    if n > 0 {
+                        eprintln!("[privacy-lodge] rename: copied {n} account-data blob(s) to the new keys");
+                    }
+                }
+            }
+
             {
                 use std::sync::atomic::{AtomicBool, Ordering};
                 static SWEPT: AtomicBool = AtomicBool::new(false);
@@ -1304,7 +1381,7 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                     )
                     .await;
                     if n > 0 {
-                        eprintln!("[pureprivacy] agents: cleared {n} dead room(s)");
+                        eprintln!("[privacy-lodge] agents: cleared {n} dead room(s)");
                     }
                 }
             }
@@ -1374,7 +1451,7 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                                 .json(&res)
                                 .send()
                                 .await;
-                            eprintln!("[pureprivacy] box config: identity backup requested (ok={ok})");
+                            eprintln!("[privacy-lodge] box config: identity backup requested (ok={ok})");
                         } else if action == "agent_setup" {
                             // The owner may choose the WebUI password rather than live with
                             // the one the container generated. It rides the command, exactly
@@ -1436,10 +1513,10 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                             if !webui_password.is_empty() {
                                 match crate::agent::set_webui_password(&webui_password) {
                                     Ok(()) => eprintln!(
-                                        "[pureprivacy] agent WebUI password set by the owner"
+                                        "[privacy-lodge] agent WebUI password set by the owner"
                                     ),
                                     Err(e) => eprintln!(
-                                        "[pureprivacy] couldn't set the agent WebUI password: {e}"
+                                        "[privacy-lodge] couldn't set the agent WebUI password: {e}"
                                     ),
                                 }
                             }
@@ -1484,7 +1561,7 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                                 .json(&out)
                                 .send()
                                 .await;
-                            eprintln!("[pureprivacy] agent setup requested by the phone (ok={ok}): {msg}");
+                            eprintln!("[privacy-lodge] agent setup requested by the phone (ok={ok}): {msg}");
                         } else if action == "agent_remove" {
                             // Destructive and near-irreversible, so the phone sends the exact
                             // Matrix id of the row the owner tapped — never a display name.
@@ -1535,7 +1612,7 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                                 .json(&out)
                                 .send()
                                 .await;
-                            eprintln!("[pureprivacy] agent remove requested (ok={ok}): {msg}");
+                            eprintln!("[privacy-lodge] agent remove requested (ok={ok}): {msg}");
                         } else if action == "agent_session_new"
                             || action == "agent_session_delete"
                         {
@@ -1599,7 +1676,7 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                                 .json(&out)
                                 .send()
                                 .await;
-                            eprintln!("[pureprivacy] {action} (ok={ok}): {msg}");
+                            eprintln!("[privacy-lodge] {action} (ok={ok}): {msg}");
                         } else if action == "agent_auth" {
                             // Device-code sign-in (Codex). Unlike every other command here this
                             // one is not over when the box finishes its part: the owner has to
@@ -1704,7 +1781,7 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                                     .json(&out)
                                     .send()
                                     .await;
-                                eprintln!("[pureprivacy] agent auth {provider} (ok={ok}): {msg}");
+                                eprintln!("[privacy-lodge] agent auth {provider} (ok={ok}): {msg}");
                             }
                         } else if action == "check_update" || action == "update" {
                             // Feature H. Clear the command first (once-only), then do the work
@@ -1751,7 +1828,7 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                                 .json(&res)
                                 .send()
                                 .await;
-                            eprintln!("[pureprivacy] box config: {action} (ok={ok}) — {msg}");
+                            eprintln!("[privacy-lodge] box config: {action} (ok={ok}) — {msg}");
                         } else {
                             // Ack first (a destructive action tears the box down), then clear
                             // the command to a no-op so it can never re-fire, THEN execute.
@@ -1807,12 +1884,12 @@ async fn run_fedauth(app: AppHandle, gen: u64) {
         match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
             Ok(l) => break l,
             Err(e) => {
-                eprintln!("[pp][fedauth] bind 127.0.0.1:{port} failed ({e}); retrying…");
+                eprintln!("[privacy-lodge][fedauth] bind 127.0.0.1:{port} failed ({e}); retrying…");
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         }
     };
-    eprintln!("[pp][fedauth] federation allowlist validator on 127.0.0.1:{port}");
+    eprintln!("[privacy-lodge][fedauth] federation allowlist validator on 127.0.0.1:{port}");
     loop {
         if is_stale(&app, gen) {
             return;
@@ -1875,7 +1952,7 @@ async fn run_pairing_sync(app: AppHandle, gen: u64) {
                     // Add: desired − known.
                     for o in desired.difference(&known) {
                         if crate::pairing::add(&paths.data_root, o).is_ok() {
-                            eprintln!("[pureprivacy] pairing reconcile: allowlisting {o}");
+                            eprintln!("[privacy-lodge] pairing reconcile: allowlisting {o}");
                             changed = true;
                             // Pre-warm the Tor circuit to this brand-new peer so the first
                             // federated invite/event lands in seconds instead of paying the
@@ -1910,14 +1987,14 @@ async fn run_pairing_sync(app: AppHandle, gen: u64) {
                         }
                         if !do_remove {
                             eprintln!(
-                                "[pureprivacy] pairing reconcile: empty list unconfirmed on re-fetch — skipping mass removal this tick"
+                                "[privacy-lodge] pairing reconcile: empty list unconfirmed on re-fetch — skipping mass removal this tick"
                             );
                         }
                     }
                     if do_remove {
                         for o in known.difference(&desired) {
                             if crate::pairing::remove(&paths.data_root, o).is_ok() {
-                                eprintln!("[pureprivacy] pairing reconcile: revoking {o}");
+                                eprintln!("[privacy-lodge] pairing reconcile: revoking {o}");
                                 changed = true;
                             }
                         }
@@ -1982,7 +2059,7 @@ async fn run_federation_circuit_warm(app: AppHandle, gen: u64) {
         ticks += 1;
         if !peers.is_empty() && ticks % 20 == 1 {
             eprintln!(
-                "[pureprivacy] federation circuit-warm: keeping {} peer(s) warm",
+                "[privacy-lodge] federation circuit-warm: keeping {} peer(s) warm",
                 peers.len()
             );
         }
@@ -2076,7 +2153,7 @@ async fn run_federation_keepalive(app: AppHandle, gen: u64) {
 
         // At most ONE concise line per tick (never per-peer).
         if nudged > 0 {
-            eprintln!("[pureprivacy] federation keepalive: nudged {nudged} peer(s)");
+            eprintln!("[privacy-lodge] federation keepalive: nudged {nudged} peer(s)");
         }
 
         sleep(Duration::from_secs(30)).await;
@@ -2269,10 +2346,10 @@ fn set_service(app: &AppHandle, name: &'static str, value: ServiceState) {
     });
 }
 
-/// stdout+stderr targets for a sidecar. /dev/null unless PUREPRIVACY_SIDECAR_LOGS=1,
+/// stdout+stderr targets for a sidecar. /dev/null unless PRIVACY_LODGE_SIDECAR_LOGS=1,
 /// in which case both go to <data>/logs/<name>.log (debug aid for call/media issues).
 fn sidecar_stdio(app: &AppHandle, name: &str) -> (Stdio, Stdio) {
-    if std::env::var("PUREPRIVACY_SIDECAR_LOGS").ok().as_deref() == Some("1") {
+    if crate::envcompat::var("SIDECAR_LOGS").ok().as_deref() == Some("1") {
         if let Ok(p) = config::paths(app) {
             let dir = p.data_root.join("logs");
             let _ = std::fs::create_dir_all(&dir);
@@ -2308,7 +2385,7 @@ fn spawn_supervised(
             set_service(&app, name, ServiceState::Starting);
 
             // Sidecar logs go to /dev/null by default (privacy + tidiness). For
-            // debugging, PUREPRIVACY_SIDECAR_LOGS=1 redirects each sidecar's
+            // debugging, PRIVACY_LODGE_SIDECAR_LOGS=1 redirects each sidecar's
             // stdout+stderr to <data>/logs/<name>.log so a call/media failure can be
             // traced (coturn allocations, LiveKit ICE state, tuwunel federation).
             let (out, err) = sidecar_stdio(&app, name);
@@ -2324,7 +2401,7 @@ fn spawn_supervised(
             let mut child = match cmd.spawn() {
                 Ok(child) => child,
                 Err(err) => {
-                    eprintln!("[pureprivacy] couldn't start {name}: {err}");
+                    eprintln!("[privacy-lodge] couldn't start {name}: {err}");
                     set_service(&app, name, ServiceState::Error);
                     jittered_sleep(backoff).await; // [QW-rust b] decorrelate respawns
                     backoff = (backoff * 2).min(BACKOFF_CAP);
@@ -2347,7 +2424,7 @@ fn spawn_supervised(
                 }
                 match child.try_wait() {
                     Ok(Some(status)) => {
-                        eprintln!("[pureprivacy] {name} exited: {status}");
+                        eprintln!("[privacy-lodge] {name} exited: {status}");
                         break false;
                     }
                     Ok(None) => {
@@ -2359,7 +2436,7 @@ fn spawn_supervised(
                         sleep(TICK).await;
                     }
                     Err(err) => {
-                        eprintln!("[pureprivacy] {name} wait error: {err}");
+                        eprintln!("[privacy-lodge] {name} wait error: {err}");
                         break false;
                     }
                 }

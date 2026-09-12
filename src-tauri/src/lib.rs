@@ -1,4 +1,4 @@
-//! PurePrivacy desktop backend. The frontend polls get_status() every 1.5s;
+//! Privacy Lodge desktop backend. The frontend polls get_status() every 1.5s;
 //! nothing is pushed via events.
 
 mod account;
@@ -6,7 +6,8 @@ mod agent;
 mod backup;
 mod commands;
 mod config;
-pub mod crypto; // pub: pp-crypt (backup-bundle encryption CLI) runs this exact code
+pub mod crypto;
+mod envcompat; // pub: pl-crypt (backup-bundle encryption CLI) runs this exact code
 mod fedauth;
 mod pairing;
 mod setup_server;
@@ -58,26 +59,26 @@ pub fn run() {
             //  - Fresh box, no creds: serve the one-page web setup. The GUI opens it in
             //    the default browser; Docker (AUTOSTART, no creds) prints the URL from
             //    the entrypoint. Loopback-only; shuts itself down once the phone signs in.
-            let autostart = std::env::var("PUREPRIVACY_AUTOSTART").ok().as_deref() == Some("1");
+            let autostart = crate::envcompat::var("AUTOSTART").ok().as_deref() == Some("1");
             if state::read(app.handle(), |i| i.onion.is_some()) {
                 if autostart {
                     supervisor::start_lifecycle(app.handle(), None);
                 }
             } else if let (Ok(user), Ok(pass)) = (
-                std::env::var("PUREPRIVACY_PROVISION_USER"),
-                std::env::var("PUREPRIVACY_PROVISION_PASS"),
+                crate::envcompat::var("PROVISION_USER"),
+                crate::envcompat::var("PROVISION_PASS"),
             ) {
-                let box_name = std::env::var("PUREPRIVACY_PROVISION_BOX")
+                let box_name = crate::envcompat::var("PROVISION_BOX")
                     .unwrap_or_else(|_| format!("{user}box"));
                 if let Err(e) = commands::begin_setup(app.handle().clone(), box_name, user, pass) {
-                    eprintln!("[pureprivacy] headless provision failed: {e}");
+                    eprintln!("[privacy-lodge] headless provision failed: {e}");
                 }
             } else {
                 setup_server::start(app.handle().clone());
                 if !autostart {
                     let url = setup_server::setup_url();
                     if let Err(e) = app.handle().opener().open_url(url, None::<&str>) {
-                        eprintln!("[pureprivacy] couldn't open the setup page: {e}");
+                        eprintln!("[privacy-lodge] couldn't open the setup page: {e}");
                     }
                 }
             }

@@ -18,9 +18,9 @@
 
 use serde_json::{json, Value};
 
-/// The roster the phone reads. Mirrors `ai.tournesol.pureprivacy.pairings` in spirit:
+/// The roster the phone reads. Mirrors `ai.tournesol.privacylodge.pairings` in spirit:
 /// box-published, owner-only, and the single source of truth for a client-side decision.
-pub const AGENTS_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.pureprivacy.agents";
+pub const AGENTS_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.privacylodge.agents";
 
 /// Where the box drops credentials for the agent container. A shared volume, not
 /// account-data: an access token is secret material and account-data is readable by every
@@ -175,9 +175,9 @@ fn write_handoff(
          MATRIX_USER_ID={user_id}\n\
          MATRIX_ACCESS_TOKEN={token}\n\
          MATRIX_DEVICE_ID={device}\n\
-         PP_BOX_ONION={onion}\n\
-         PP_OWNER={owner}\n\
-         PP_AGENT_LOCALPART={localpart}\n",
+         PL_BOX_ONION={onion}\n\
+         PL_OWNER={owner}\n\
+         PL_AGENT_LOCALPART={localpart}\n",
         port = crate::config::HOMESERVER_PORT + crate::config::off(),
     );
     // Only emit what the owner actually chose. An absent key is meaningfully different from
@@ -185,10 +185,10 @@ fn write_handoff(
     // provider needs no key", and the container branches on exactly that.
     let mut body = body;
     for (k, v) in [
-        ("PP_AGENT_PROVIDER", &spec.provider),
-        ("PP_AGENT_MODEL", &spec.model),
-        ("PP_AGENT_BASE_URL", &spec.base_url),
-        ("PP_AGENT_API_KEY", &spec.api_key),
+        ("PL_AGENT_PROVIDER", &spec.provider),
+        ("PL_AGENT_MODEL", &spec.model),
+        ("PL_AGENT_BASE_URL", &spec.base_url),
+        ("PL_AGENT_API_KEY", &spec.api_key),
     ] {
         if !v.is_empty() {
             body.push_str(&format!("{k}={v}\n"));
@@ -198,7 +198,7 @@ fn write_handoff(
     // it every new agent opens with "No home channel is set for Matrix" — a question the
     // owner shouldn't have to answer, since we just created the one room it has.
     if let Some(room) = room.filter(|r| !r.is_empty()) {
-        body.push_str(&format!("PP_AGENT_ROOM={room}\n"));
+        body.push_str(&format!("PL_AGENT_ROOM={room}\n"));
     }
 
     let agents_dir = std::path::Path::new(HANDOFF_AGENTS_DIR);
@@ -349,7 +349,7 @@ pub fn set_webui_password(password: &str) -> Result<(), String> {
 // The box keeps the list because it is the only party that knows which rooms it created for
 // which agent. Deriving it on the phone would mean guessing from room membership, and a wrong
 // guess here puts an AI in the Messaging list next to real people.
-pub const SESSIONS_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.pureprivacy.agent_sessions";
+pub const SESSIONS_ACCOUNT_DATA_TYPE: &str = "ai.tournesol.privacylodge.agent_sessions";
 
 async fn read_sessions(client: &reqwest::Client, url: &str, token: &str) -> Value {
     match client.get(url).bearer_auth(token).send().await {
@@ -554,10 +554,10 @@ pub async fn publish_registry(
     // The agent WebUI's own onion, so the phone's Agent settings app knows where to tunnel.
     // Published here rather than in boxstatus because this is the agent-shaped key the
     // phone already reads, and it's empty/absent on a box with no agents.
-    // In the container PUREPRIVACY_DATA_DIR=/data, so the agent hidden service's hostname
+    // In the container PRIVACY_LODGE_DATA_DIR=/data, so the agent hidden service's hostname
     // lands here. Empty until tor has minted it (first boot after this port was added).
     let webui_onion = std::fs::read_to_string(
-        std::path::Path::new(&std::env::var("PUREPRIVACY_DATA_DIR").unwrap_or("/data".into()))
+        std::path::Path::new(&crate::envcompat::var("DATA_DIR").unwrap_or("/data".into()))
             .join("data/tor/hs-agent/hostname"),
     )
     .map(|s| s.trim().to_string())
@@ -579,7 +579,7 @@ pub async fn publish_registry(
     // descriptor at all, so this key IS the app's access to Agent settings — it has to
     // travel with the address it unlocks.
     let webui_auth_key = std::fs::read_to_string(
-        std::path::Path::new(&std::env::var("PUREPRIVACY_DATA_DIR").unwrap_or("/data".into()))
+        std::path::Path::new(&crate::envcompat::var("DATA_DIR").unwrap_or("/data".into()))
             .join("data/tor/agent-client-auth.key"),
     )
     .map(|s| s.trim().to_string())
@@ -912,9 +912,9 @@ pub async fn cleanup_dead_rooms(
         if let Some(why) = reason {
             if leave_and_forget(client, base, registry_url, owner_token, room).await {
                 cleared += 1;
-                eprintln!("[pureprivacy] agents: cleared {room} — {why}");
+                eprintln!("[privacy-lodge] agents: cleared {room} — {why}");
             } else {
-                eprintln!("[pureprivacy] agents: could NOT clear {room} ({why})");
+                eprintln!("[privacy-lodge] agents: could NOT clear {room} ({why})");
             }
         }
     }
@@ -945,7 +945,7 @@ fn is_reserved_local(user_id: &str) -> bool {
 /// because the identification below is a heuristic and a wrong guess that merely shows an
 /// extra row is recoverable, while a wrong guess that deletes a chat is not.
 ///
-/// The heuristic is exact on a PurePrivacy box today: registration is token-gated and the box
+/// The heuristic is exact on a Privacy Lodge box today: registration is token-gated and the box
 /// is the only thing that ever registers, so a LOCAL account that is neither the owner nor a
 /// known agent can only be an agent the box created earlier. If a box ever gains a second
 /// human account, this needs a real marker instead.
@@ -1057,7 +1057,7 @@ async fn discover_orphans(
             .collect();
         if !locals.is_empty() || people.len() <= 2 {
             eprintln!(
-                "[pureprivacy] agents: room {} — {} member(s), {} local non-owner",
+                "[privacy-lodge] agents: room {} — {} member(s), {} local non-owner",
                 room,
                 people.len(),
                 locals.len()
@@ -1102,7 +1102,7 @@ async fn discover_orphans(
             .collect();
     }
     eprintln!(
-        "[pureprivacy] agents: scanned {} room(s), {} leftover agent room(s) found",
+        "[privacy-lodge] agents: scanned {} room(s), {} leftover agent room(s) found",
         rooms.len(),
         out.len()
     );
@@ -1134,7 +1134,7 @@ pub async fn setup(
     // authenticating.
     if !agent_running(client).await {
         return Err("the agents add-on isn't running on this box — enable it with \
-                    './pp-box agents on', then try again"
+                    './pl-box agents on', then try again"
             .to_string());
     }
 
@@ -1181,7 +1181,7 @@ pub async fn setup(
     if room_id.is_none() {
         // Not fatal: the account and runtime are live, and a room can be created later.
         // Better to report a working-but-incomplete setup than to fail the whole thing.
-        eprintln!("[pureprivacy] agent: account created but the room wasn't — will retry later");
+        eprintln!("[privacy-lodge] agent: account created but the room wasn't — will retry later");
     }
 
     write_handoff(
@@ -1295,7 +1295,7 @@ pub async fn remove(
             .unwrap_or(false);
         chat_cleared = left && forgot;
         if !chat_cleared {
-            eprintln!("[pureprivacy] agent remove: leave={left} forget={forgot} for {room}");
+            eprintln!("[privacy-lodge] agent remove: leave={left} forget={forgot} for {room}");
         }
     }
 
@@ -1380,7 +1380,7 @@ pub async fn remove(
             .unwrap_or(false);
         name_freed = ok;
         if !ok {
-            eprintln!("[pureprivacy] agent remove: couldn't deactivate {target} (name stays taken)");
+            eprintln!("[privacy-lodge] agent remove: couldn't deactivate {target} (name stays taken)");
         }
     }
 

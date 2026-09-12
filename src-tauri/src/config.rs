@@ -111,7 +111,7 @@ const MAX_BASE_PORT: u16 = TURN_RELAY_PORT_MAX;
 /// Largest offset that keeps every `PORT + off()` inside u16 (no wraparound).
 const MAX_PORT_OFFSET: u16 = u16::MAX - MAX_BASE_PORT;
 
-/// Per-instance LOOPBACK port offset (env `PUREPRIVACY_PORT_OFFSET`, default 0).
+/// Per-instance LOOPBACK port offset (env `PRIVACY_LODGE_PORT_OFFSET`, default 0).
 /// Lets two boxes run on one host: every loopback bind/map target shifts by this,
 /// while the .onion-facing ports stay standard (each box has its own onion, so
 /// 8008/8448/3478/7443/8082 never collide and clients see the same ports on both).
@@ -124,7 +124,7 @@ const MAX_PORT_OFFSET: u16 = u16::MAX - MAX_BASE_PORT;
 /// value to `MAX_PORT_OFFSET` — the largest offset that keeps every `PORT+off()`
 /// inside u16. A non-numeric / absent env stays 0 (the production default).
 pub fn off() -> u16 {
-    std::env::var("PUREPRIVACY_PORT_OFFSET")
+    crate::envcompat::var("PORT_OFFSET")
         .ok()
         .and_then(|s| s.parse::<u16>().ok())
         .unwrap_or(0)
@@ -297,7 +297,7 @@ fn ensure_agent_client_auth(p: &Paths) -> Result<(), String> {
     std::fs::write(&priv_file, base32(&sk))
         .map_err(|e| format!("couldn't write {}: {e}", priv_file.display()))?;
     set_0600(&priv_file);
-    eprintln!("[pureprivacy] agent WebUI: tor v3 client authorisation enabled");
+    eprintln!("[privacy-lodge] agent WebUI: tor v3 client authorisation enabled");
     Ok(())
 }
 
@@ -541,7 +541,7 @@ pub fn render_tuwunel(
 /// Pure builder for turnserver.conf — unit-tested.
 fn turnserver_conf_string(onion: &str, secret: &str) -> String {
     format!(
-        "# PurePrivacy coturn — TCP-only relay over Tor (generated, do not edit).\n\
+        "# Privacy Lodge coturn — TCP-only relay over Tor (generated, do not edit).\n\
          listening-port={turn}\n\
          # Bind the STUN/TURN control listener to loopback ONLY. tor maps onion:3478/5349\n\
          # here, so nothing legitimate needs a non-loopback address — and without this coturn\n\
@@ -791,7 +791,7 @@ fn livekit_yaml_string(
     let tcp_port = tcp_port + off();
     let udp_port = tcp_port + 1;
     let mut s = format!(
-        "# PurePrivacy LiveKit SFU config (generated, do not edit).\n\
+        "# Privacy Lodge LiveKit SFU config (generated, do not edit).\n\
          # Tor-only mode: TCP fallback only, since UDP cannot traverse a hidden service.\n\
          port: {ws_port}\n\
          bind_addresses:\n\

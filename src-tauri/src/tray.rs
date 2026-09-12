@@ -15,8 +15,8 @@ pub struct TrayHandles {
 }
 
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
-    let status = MenuItem::with_id(app, "status", "PurePrivacy", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "Open PurePrivacy", true, None::<&str>)?;
+    let status = MenuItem::with_id(app, "status", "Privacy Lodge", false, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Privacy Lodge", true, None::<&str>)?;
     let pause =
         MenuItem::with_id(app, "pause", "Pause box (people can't reach you)", true, None::<&str>)?;
     let quit =

@@ -104,7 +104,7 @@ pub fn begin_setup(
         inner.join_token = join_token;
         inner.livekit_api_key = livekit_api_key;
         inner.livekit_api_secret = livekit_api_secret;
-        // Persist the admin password: PurePrivacy uses password login between the
+        // Persist the admin password: Privacy Lodge uses password login between the
         // phone and the box, so the box keeps its own credential (single-user
         // appliance) instead of dropping it after admin creation.
         inner.admin_password = password.clone();
@@ -173,9 +173,9 @@ pub fn save_recovery_kit_html(app: AppHandle) -> Result<String, String> {
         .collect::<Vec<_>>()
         .join("-");
     let filename = if slug.is_empty() {
-        "pureprivacy-recovery-kit.html".to_string()
+        "privacy-lodge-recovery-kit.html".to_string()
     } else {
-        format!("pureprivacy-recovery-kit-{slug}.html")
+        format!("privacy-lodge-recovery-kit-{slug}.html")
     };
     let path = downloads.join(filename);
 
@@ -193,7 +193,7 @@ pub fn save_recovery_kit_html(app: AppHandle) -> Result<String, String> {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>PurePrivacy recovery kit — {box_name}</title>
+<title>Privacy Lodge recovery kit — {box_name}</title>
 <style>
   body {{ font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
          color: #1A1A1A; background: #FFFFFF; max-width: 640px; margin: 48px auto; padding: 0 24px; }}
@@ -212,7 +212,7 @@ pub fn save_recovery_kit_html(app: AppHandle) -> Result<String, String> {
 </style>
 </head>
 <body>
-  <h1>PurePrivacy recovery kit <span class="dot">●</span></h1>
+  <h1>Privacy Lodge recovery kit <span class="dot">●</span></h1>
   <div class="meta">Box: <strong>{box_name}</strong> &nbsp;·&nbsp; Created: {created}</div>
 
   <h2>Your six recovery words</h2>
@@ -271,7 +271,7 @@ pub fn get_connect_qr(app: AppHandle) -> Result<ConnectQr, String> {
     if token.is_empty() {
         return Err("Set up your box first.".into());
     }
-    let payload = format!("pureprivacy://connect?hs={onion}&user={username}&token={token}");
+    let payload = format!("privacybolt://connect?hs={onion}&user={username}&token={token}");
     let svg = render_qr_svg(&payload)?;
     Ok(ConnectQr { payload, svg })
 }
@@ -314,7 +314,7 @@ pub fn get_join_info(app: AppHandle) -> Result<JoinInfo, String> {
     if join_token.is_empty() {
         return Err("Set up your box first.".into());
     }
-    let payload = format!("pureprivacy://join?hs={onion}&token={join_token}");
+    let payload = format!("privacybolt://join?hs={onion}&token={join_token}");
     let svg = render_qr_svg(&payload)?;
     Ok(JoinInfo { onion, join_token, svg })
 }
@@ -341,7 +341,7 @@ pub fn app_info(app: AppHandle) -> Result<AppInfo, String> {
 /// Wipe the box: stop everything, delete the data dir (RocksDB, tor keys/onion,
 /// configs, secrets), and return to the fresh-setup state. Destructive and
 /// irreversible — the onion identity is gone. (Plan task T-UNINST; the GUI heir
-/// of `pureprivacy reset`.) The frontend confirms before calling this.
+/// of `privacy-lodge reset`.) The frontend confirms before calling this.
 #[tauri::command]
 pub fn reset_box(app: AppHandle) -> Result<(), String> {
     supervisor::stop_lifecycle(&app);
@@ -415,7 +415,7 @@ pub async fn pair_accept(app: AppHandle, code: String) -> Result<String, String>
     // write can't land in 3 tries, federation/calls to the peer wouldn't work
     // anyway — and a re-accept (or phone QR scan) records it when Tor recovers.
     if let Err(e) = supervisor::pair_add_onion_to_account_data(&app, &peer, 3).await {
-        eprintln!("[pureprivacy] pair_accept: account-data not updated ({e}); the reconcile may revoke {peer} until it's recorded");
+        eprintln!("[privacy-lodge] pair_accept: account-data not updated ({e}); the reconcile may revoke {peer} until it's recorded");
     }
     let dir = state::app_data_dir(&app)?;
     pairing::add(&dir, &peer)?;
@@ -481,11 +481,13 @@ pub fn start_box(app: AppHandle) -> Result<(), String> {
 pub struct LegacyInstall {
     /// True if a v0.1 Docker appliance is running on this machine.
     pub present: bool,
-    /// The `pureprivacy-*` container names found (e.g. for the UI to list).
+    /// The `pureprivacy-*` container names found — the pre-Rust appliance's own naming, kept as-is
+    /// because that is what is being detected.
     pub containers: Vec<String>,
 }
 
-/// Detect an existing v0.1 (Docker appliance) PurePrivacy install so the native
+/// Detect an existing v0.1 Docker appliance — the pre-Rust *PurePrivacy* stack, whose
+/// container names are `pureprivacy-*` for good (a historical artefact, not a rename miss) — so the native
 /// app never silently orphans someone's running box. (Plan task T-MIG.) The
 /// native app uses a different engine (tuwunel, fresh server identity — no DB
 /// migration from Synapse), so the UI must offer an explicit choice rather than

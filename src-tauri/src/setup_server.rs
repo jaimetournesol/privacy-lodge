@@ -3,7 +3,7 @@
 //! On first run (no admin account yet) the box serves a SINGLE local web page:
 //! a username/password form → provisions the box (mint onion, create admin,
 //! start sidecars) → shows the login QR the phone already understands
-//! (`pureprivacy://connect?hs=<onion>&user=<user>`). Once the phone signs in
+//! (`privacybolt://connect?hs=<onion>&user=<user>`). Once the phone signs in
 //! (a new device appears on the admin account) the server shuts itself down —
 //! setup is a one-time thing.
 //!
@@ -31,9 +31,9 @@ use crate::{commands, config, state};
 pub fn start(app: AppHandle) -> u16 {
     let port = config::SETUP_PORT + config::off();
     // Loopback on the GUI; the container binds 0.0.0.0 (see module docs) — the
-    // Docker entrypoint sets PUREPRIVACY_SETUP_BIND=0.0.0.0 and publishes only to
+    // Docker entrypoint sets PRIVACY_LODGE_SETUP_BIND=0.0.0.0 and publishes only to
     // the host's 127.0.0.1.
-    let bind = std::env::var("PUREPRIVACY_SETUP_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let bind = crate::envcompat::var("SETUP_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
     let addr = format!("{bind}:{port}");
 
     let stop = Arc::new(AtomicBool::new(false));
