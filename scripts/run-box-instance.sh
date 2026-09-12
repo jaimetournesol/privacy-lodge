@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Launch one PurePrivacy desktop box GUI as an isolated instance.
+# Launch one Privacy Lodge desktop box GUI as an isolated instance.
 # Usage: start-box.sh <name> <port-offset>
 set -u
 NAME="$1"; OFFSET="$2"
 # Derive from this script's location so the checkout can live anywhere.
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${PUREPRIVACY_BIN:-$REPO/src-tauri/target/release/pureprivacy}"
-SHARED_BIN="${PUREPRIVACY_BIN_DIR:-$HOME/.local/share/ai.tournesol.pureprivacy/bin}"
+BIN="${PRIVACY_LODGE_BIN:-$REPO/src-tauri/target/release/privacy-lodge}"
+SHARED_BIN="${PRIVACY_LODGE_BIN_DIR:-$HOME/.local/share/ai.tournesol.privacylodge/bin}"
 ROOT=/tmp/ppbox/$NAME
 [ -x "$BIN" ] || { echo "[start-box] no binary at $BIN — build it: pnpm tauri build --no-bundle" >&2; exit 1; }
 mkdir -p "$ROOT"
@@ -14,8 +14,8 @@ export XDG_DATA_HOME="$ROOT/share"
 export XDG_CONFIG_HOME="$ROOT/config"
 export XDG_CACHE_HOME="$ROOT/cache"
 mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME"
-export PUREPRIVACY_BIN_DIR="$SHARED_BIN"
-export PUREPRIVACY_PORT_OFFSET="$OFFSET"
+export PRIVACY_LODGE_BIN_DIR="$SHARED_BIN"
+export PRIVACY_LODGE_PORT_OFFSET="$OFFSET"
 # GUI session
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 export DISPLAY="${DISPLAY:-:0}"

@@ -1,10 +1,10 @@
-# PurePrivacy Desktop — your box
+# Privacy Lodge Desktop — your box
 
 > **Take your data back.** Run your own private server — your *box* — that hosts
 > your apps, over Tor, end-to-end encrypted, with no corporation in the middle.
 
 Your messages, your friends, your files, your feed — right now they live on
-corporate servers, harvested for profit and surveillance. **PurePrivacy is how you
+corporate servers, harvested for profit and surveillance. **Privacy Lodge is how you
 take them back.** You run your own private server, and it hosts your apps. Your data
 lives with you. Everything is end-to-end encrypted and travels **only over Tor** —
 no central platform, no clearnet, no ads, no algorithm, no data broker in the path.
@@ -20,7 +20,7 @@ Your box is your always-on private cloud. What it hosts today, and where it's go
 
 - **✅ Messaging + calls (working today)** — end-to-end encrypted chat and
   voice/video, federated box-to-box over Tor, from the
-  [PurePrivacy phone app](../pureprivacy-mobile).
+  [Privacy Bolt app](../privacy-bolt).
 - **🚧 Social (planned)** — a Tor-only, self-hosted, federated alternative to the
   corporate timeline: post from your box, follow other boxes, and content flows
   box-to-box over Tor — no company, no algorithm, no clearnet.
@@ -28,7 +28,7 @@ Your box is your always-on private cloud. What it hosts today, and where it's go
   everything else. Each gets its own account and its own end-to-end encrypted
   chat, and a box can run several. Their control panel rides a *second* onion
   behind tor v3 client authorisation, because it can run shell commands.
-  Optional add-on: `./pp-box agents on`, or choose it at install.
+  Optional add-on: `./pl-box agents on`, or choose it at install.
 - **🚧 Files (planned)** — the box is built to host apps; the phone becomes the
   launcher for all of them.
 
@@ -59,7 +59,7 @@ Set-up is the same one-page flow both ways: **choose a username + password on a 
 page → scan the QR with the phone app → the page closes and everything is managed from your
 phone.**
 
-> Get the **phone app** from the [pureprivacy-mobile releases](https://github.com/jaimetournesol/pureprivacy-mobile/releases/latest) (latest APK) — it's the same app wherever your box runs.
+> Get the **phone app** from the [privacy-bolt releases](https://github.com/jaimetournesol/privacy-bolt/releases/latest) (latest APK) — it's the same app wherever your box runs.
 
 ### Option 1 · 🐳 Docker — works on every OS (recommended)
 
@@ -67,20 +67,20 @@ Runs anywhere Docker does — **Windows, macOS, Linux, servers, NAS, Raspberry P
 desktop needed: the box is reached only over its `.onion`, set up from a browser and managed
 from the phone.
 
-**Pull the published image** ([`jaimemelon/pureprivacy-box`](https://hub.docker.com/r/jaimemelon/pureprivacy-box)):
+**Pull the published image** ([`jaimemelon/privacy-lodge-box`](https://hub.docker.com/r/jaimemelon/privacy-lodge-box)):
 
 ```bash
-docker pull jaimemelon/pureprivacy-box:latest
+docker pull jaimemelon/privacy-lodge-box:latest
 MYVOL=pp-data-$(openssl rand -hex 4)   # your box's data volume — note it down and always reuse it
-docker run -d --name pureprivacy-box --restart unless-stopped -v "$MYVOL":/data \
-  -p 127.0.0.1:8470:8470 -e PUREPRIVACY_SETUP_BIND=0.0.0.0 jaimemelon/pureprivacy-box:latest
+docker run -d --name privacy-lodge-box --restart unless-stopped -v "$MYVOL":/data \
+  -p 127.0.0.1:8470:8470 -e PRIVACY_LODGE_SETUP_BIND=0.0.0.0 jaimemelon/privacy-lodge-box:latest
 # open http://127.0.0.1:8470/ → username + password → scan the QR in the phone app
 ```
 
 That volume holds your box's identity (the onion key) — **keep the name and back it up**; a
 different name means a different, empty box.
 
-Or build + manage it with the **`pp-box`** helper (`cd docker && ./pp-box build && ./pp-box init && ./pp-box up`).
+Or build + manage it with the **`pl-box`** helper (`cd docker && ./pl-box build && ./pl-box init && ./pl-box up`).
 
 Then `status` / `logs` / `backup` / `restore` / `update` as needed. **Full guide:
 [docker/README.md](docker/README.md).**
@@ -97,13 +97,13 @@ On first launch the box **opens a one-page setup in your default browser** (user
 password → QR). Once your phone connects, the box runs in the background and is managed from
 the phone; the desktop window is just a status shell.
 
-**Install the package** from the [latest release](https://github.com/jaimetournesol/pureprivacy-desktop/releases/latest)
+**Install the package** from the [latest release](https://github.com/jaimetournesol/privacy-lodge/releases/latest)
 — it bundles everything the box runs on (Tor, the homeserver, the call services), so there is
 nothing else to fetch:
 
 ```bash
-sudo apt install ./PurePrivacy_*_amd64.deb     # or: sudo dnf install ./PurePrivacy-*.rpm
-pureprivacy                                     # launch — setup opens in your browser
+sudo apt install ./Privacy Lodge_*_amd64.deb     # or: sudo dnf install ./Privacy Lodge-*.rpm
+privacy-lodge                                     # launch — setup opens in your browser
 ```
 (Or run the `.AppImage` directly, no install needed.)
 
@@ -116,8 +116,8 @@ box checks for a signed update over Tor and installs it only when you approve.
 source ~/.nvm/nvm.sh
 pnpm install
 ./scripts/fetch-sidecars.sh                 # fetch tuwunel + tor + call sidecars
-pnpm tauri build --no-bundle                # → src-tauri/target/release/pureprivacy
-./src-tauri/target/release/pureprivacy      # launch — setup opens in your browser
+pnpm tauri build --no-bundle                # → src-tauri/target/release/privacy-lodge
+./src-tauri/target/release/privacy-lodge      # launch — setup opens in your browser
 ```
 
 For hot-reload development use `pnpm tauri dev`. To build a *bundled* installer (sidecars
@@ -162,8 +162,8 @@ dropped from the network and silently breaks federation, so pinning avoids a box
 fine" but can't reach peers. It also fetches `caddy`, `coturn`, `lk-jwt-service`, and
 `livekit-server` (bundled **v1.13.1**, from `livekit/livekit-server`) for federation +
 Element Call. A missing `livekit-server` just means group calls are off until it's installed.
-Binaries land in `$HOME/.local/share/ai.tournesol.pureprivacy/bin` by default — override with
-`PUREPRIVACY_BIN_DIR`. Run with `--uninstall` to remove them.
+Binaries land in `$HOME/.local/share/ai.tournesol.privacylodge/bin` by default — override with
+`PRIVACY_LODGE_BIN_DIR`. Run with `--uninstall` to remove them.
 
 ## Demo mode
 
@@ -174,7 +174,7 @@ running. This keeps UI work unblocked and makes first-clone DX painless.
 
 ## Runtime layout
 
-Everything lives under the platform app-data dir (`ai.tournesol.pureprivacy`):
+Everything lives under the platform app-data dir (`ai.tournesol.privacylodge`):
 
 ```
 <app_data_dir>/
@@ -205,15 +205,15 @@ loopback listeners (federation, calls, and client API are reached only via the o
 > over Tor's HTTP-CONNECT tunnel (TLS-only), so Caddy **also** serves lk-jwt and the
 > client API over TLS on dedicated onion ports `8443` / `8009`. The phone app's call
 > code targets exactly these — that's how Element Call in the WebView discovers the
-> call focus and connects over Tor. (`PUREPRIVACY_PORT_OFFSET` shifts the loopback
+> call focus and connects over Tor. (`PRIVACY_LODGE_PORT_OFFSET` shifts the loopback
 > binds so two boxes can share one host; onion ports stay standard.)
 
 ## QR pairing folds peers into the federation allowlist
 
-PurePrivacy only federates with boxes you've paired with. The phone's QR contact
+Privacy Lodge only federates with boxes you've paired with. The phone's QR contact
 exchange drives this: when the owner scans a peer's code, the phone records the
 peer's box onion in the owner's Matrix account data
-(`ai.tournesol.pureprivacy.pairings`). The box **watches** that account data
+(`ai.tournesol.privacylodge.pairings`). The box **watches** that account data
 (`supervisor.rs`), folds any new peer onion into the fed-proxy allowlist, re-renders
 the Caddyfile, and hot-reloads Caddy — so the two boxes start federating with no
 manual step. (Pair codes can also be exchanged box-to-box directly; both paths land
@@ -221,7 +221,7 @@ in `pairings.json` → `render_caddyfile`.)
 
 ## Licence
 
-PurePrivacy is **AGPL-3.0-or-later** — see [`LICENSE`](LICENSE). The programs a box bundles and
+Privacy Lodge is **AGPL-3.0-or-later** — see [`LICENSE`](LICENSE). The programs a box bundles and
 runs (Element Call, tuwunel, Tor, LiveKit, Caddy, coturn, lk-jwt-service) keep their own
 licences, with a written source offer for the AGPL ones, in
 [`THIRD-PARTY-LICENSES.md`](THIRD-PARTY-LICENSES.md).

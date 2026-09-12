@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the signed update manifest for a PurePrivacy box release (feature H).
+# Build the signed update manifest for a Privacy Lodge box release (feature H).
 #
 # Boxes fetch update.json + update.json.sig over Tor and verify the detached ed25519
 # signature against the public key COMPILED INTO the box binary
@@ -8,16 +8,16 @@
 #
 #   ./scripts/sign-release.sh <version> <native-binary> [release-notes-file]
 #
-# e.g.  ./scripts/sign-release.sh 0.1.1 dist/pureprivacy-0.1.1-linux-x86_64 notes.txt
+# e.g.  ./scripts/sign-release.sh 0.1.1 dist/privacy-lodge-0.1.1-linux-x86_64 notes.txt
 #
 # Writes update.json + update.json.sig into dist/. Attach BOTH to the GitHub release,
 # together with the native binary itself (the manifest pins it by sha256).
 set -euo pipefail
 
-KEY="${PP_UPDATE_KEY:-$HOME/Tournesol/_special-project/pureprivacy/pp-update-key.pem}"
-PUB="${PP_UPDATE_PUB:-$HOME/Tournesol/_special-project/pureprivacy/pp-update-pub.pem}"
-REPO="${PP_REPO:-jaimetournesol/pureprivacy-desktop}"
-OUT="${PP_OUT:-dist}"
+KEY="${PL_UPDATE_KEY:-$HOME/Tournesol/_special-project/pureprivacy/pp-update-key.pem}"
+PUB="${PL_UPDATE_PUB:-$HOME/Tournesol/_special-project/pureprivacy/pp-update-pub.pem}"
+REPO="${PL_REPO:-jaimetournesol/privacy-lodge}"
+OUT="${PL_OUT:-dist}"
 
 VERSION="${1:-}"
 BINARY="${2:-}"
@@ -36,7 +36,7 @@ SHA="$(sha256sum "$BINARY" | cut -d' ' -f1)"
 SIZE="$(stat -c%s "$BINARY")"
 URL="https://github.com/$REPO/releases/download/v$VERSION/$ASSET"
 # The box keys native builds by "<os>-<arch>" (std::env::consts), e.g. linux-x86_64.
-TARGET="${PP_TARGET:-linux-x86_64}"
+TARGET="${PL_TARGET:-linux-x86_64}"
 
 # Release notes -> a JSON array of short lines (what PP Config shows under "What's new").
 if [ -n "$NOTES_FILE" ] && [ -f "$NOTES_FILE" ]; then
@@ -59,8 +59,8 @@ m = {
     # the only SIGNED statement of which agent image belongs to a release — without it a
     # Docker install has no trusted answer to "which agent image matches my box".
     "docker": {
-        "image": f"jaimemelon/pureprivacy-box:{version}",
-        "agent_image": f"jaimemelon/pureprivacy-agent:{version}",
+        "image": f"jaimemelon/privacy-lodge-box:{version}",
+        "agent_image": f"jaimemelon/privacy-lodge-agent:{version}",
     },
     "native": {target: {"url": url, "sha256": sha, "size": int(size)}},
 }
@@ -89,12 +89,12 @@ rm -f /tmp/pp-verify.sig
 # --- post-quantum half (feature K) ------------------------------------------------------
 # Boxes REQUIRE both signatures, so a release without this one simply won't install. Fail
 # loudly here rather than publishing something every box will refuse.
-PQKEY="${PP_UPDATE_PQ_KEY:-$HOME/Tournesol/_special-project/pureprivacy/pp-update-pq.key}"
-PQPUB="${PP_UPDATE_PQ_PUB:-$HOME/Tournesol/_special-project/pureprivacy/pp-update-pq.pub.hex}"
-PPSIGN="${PP_SIGN_BIN:-$(dirname "$0")/../src-tauri/target/release/pp-sign}"
-[ -x "$PPSIGN" ] || PPSIGN="$(dirname "$0")/../src-tauri/target/debug/pp-sign"
+PQKEY="${PL_UPDATE_PQ_KEY:-$HOME/Tournesol/_special-project/pureprivacy/pp-update-pq.key}"
+PQPUB="${PL_UPDATE_PQ_PUB:-$HOME/Tournesol/_special-project/pureprivacy/pp-update-pq.pub.hex}"
+PPSIGN="${PL_SIGN_BIN:-$(dirname "$0")/../src-tauri/target/release/pl-sign}"
+[ -x "$PPSIGN" ] || PPSIGN="$(dirname "$0")/../src-tauri/target/debug/pl-sign"
 [ -f "$PQKEY" ] || { echo "post-quantum signing key not found: $PQKEY" >&2; exit 2; }
-[ -x "$PPSIGN" ] || { echo "pp-sign not built (cargo build --bin pp-sign)" >&2; exit 2; }
+[ -x "$PPSIGN" ] || { echo "pl-sign not built (cargo build --bin pl-sign)" >&2; exit 2; }
 "$PPSIGN" sign "$PQKEY" "$OUT/update.json" > "$OUT/update.json.pqsig"
 if "$PPSIGN" verify "$PQPUB" "$OUT/update.json" "$OUT/update.json.pqsig" >/dev/null 2>&1; then
   echo "✅ post-quantum signature verifies (SLH-DSA-SHA2-128s)"
@@ -105,5 +105,5 @@ fi
 echo
 echo "Wrote $OUT/update.json + $OUT/update.json.sig + $OUT/update.json.pqsig"
 echo "Publish with:"
-echo "  gh release create v$VERSION --repo $REPO --title \"PurePrivacy box $VERSION\" \\"
+echo "  gh release create v$VERSION --repo $REPO --title \"Privacy Lodge box $VERSION\" \\"
 echo "    \"$BINARY\" \"$OUT/update.json\" \"$OUT/update.json.sig\" \"$OUT/update.json.pqsig\""

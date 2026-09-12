@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# fetch-sidecars.sh — fetch the two PurePrivacy sidecar binaries for local dev.
+# fetch-sidecars.sh — fetch the two Privacy Lodge sidecar binaries for local dev.
 #
 #   tuwunel    — Matrix homeserver, extracted from the upstream OCI image
 #   tor        — C-tor daemon, copied from the system install (or apt-installed)
 #   turnserver — coturn for 1:1 voice (OPTIONAL — box runs fine without it)
 #
-# Binaries land in $PUREPRIVACY_BIN_DIR, defaulting to the app's runtime bin dir:
-#   $HOME/.local/share/ai.tournesol.pureprivacy/bin
+# Binaries land in $PRIVACY_LODGE_BIN_DIR, defaulting to the app's runtime bin dir:
+#   $HOME/.local/share/ai.tournesol.privacylodge/bin
 #
 # Usage:
 #   ./scripts/fetch-sidecars.sh              # fetch both (idempotent)
@@ -16,7 +16,7 @@
 #
 set -euo pipefail
 
-BIN_DIR="${PUREPRIVACY_BIN_DIR:-$HOME/.local/share/ai.tournesol.pureprivacy/bin}"
+BIN_DIR="${PRIVACY_LODGE_BIN_DIR:-$HOME/.local/share/ai.tournesol.privacylodge/bin}"
 TUWUNEL_IMAGE="ghcr.io/matrix-construct/tuwunel:latest"
 LIVEKIT_IMAGE="livekit/livekit-server:v1.13.1"
 LKJWT_IMAGE="ghcr.io/element-hq/lk-jwt-service:0.2.0"
@@ -77,8 +77,8 @@ fi
 
 mkdir -p "$BIN_DIR"
 info "Sidecar bin dir: ${C_BOLD}$BIN_DIR${C_RESET}"
-if [[ -z "${PUREPRIVACY_BIN_DIR:-}" ]]; then
-  info "Override with:   export PUREPRIVACY_BIN_DIR=\"$BIN_DIR\""
+if [[ -z "${PRIVACY_LODGE_BIN_DIR:-}" ]]; then
+  info "Override with:   export PRIVACY_LODGE_BIN_DIR=\"$BIN_DIR\""
 fi
 
 # verify <path> — true if the binary runs and reports a version
@@ -366,4 +366,4 @@ if [[ "$FAILURES" -gt 0 ]]; then
 fi
 ok "${C_BOLD}All sidecars ready in $BIN_DIR${C_RESET}"
 info "If you use a custom dir, make sure the app sees it:"
-printf '    export PUREPRIVACY_BIN_DIR="%s"\n' "$BIN_DIR"
+printf '    export PRIVACY_LODGE_BIN_DIR="%s"\n' "$BIN_DIR"

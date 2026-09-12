@@ -67,12 +67,12 @@ jobs:
         working-directory: src-tauri
         run: cargo test --locked
 
-      # pp-box guards the box's identity in ~600 lines of bash and has already shipped two
+      # pl-box guards the box's identity in ~600 lines of bash and has already shipped two
       # silent bugs (backup missing the agent volumes; a SIGPIPE-under-pipefail sniff that
       # misread every large bundle as legacy). These round-trips run against throwaway
       # docker volumes only — ~30s on the runner's stock docker.
-      - name: pp-box smoke tests (backup/restore/destroy)
-        run: ./scripts/test-pp-box.sh
+      - name: pl-box smoke tests (backup/restore/destroy)
+        run: ./scripts/test-pl-box.sh
 
       - name: Tauri build (deb + AppImage)
         run: pnpm tauri build --bundles deb appimage
@@ -80,7 +80,7 @@ jobs:
       - name: Upload bundles
         uses: actions/upload-artifact@v4
         with:
-          name: pureprivacy-linux-x64
+          name: privacy-lodge-linux-x64
           if-no-files-found: error
           path: |
             src-tauri/target/release/bundle/deb/*.deb

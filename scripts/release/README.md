@@ -1,6 +1,6 @@
 # Release runbook
 
-How PurePrivacy desktop releases work, and what is still blocked on the owner.
+How Privacy Lodge desktop releases work, and what is still blocked on the owner.
 
 ## Pipeline overview
 
@@ -18,13 +18,13 @@ The Tauri updater verifies downloads with a minisign signature. Generate the
 keypair locally:
 
 ```sh
-pnpm tauri signer generate -w ~/.tauri/pureprivacy.key
+pnpm tauri signer generate -w ~/.tauri/privacy-lodge.key
 ```
 
 This writes:
 
-- `~/.tauri/pureprivacy.key` — the **private** key. Never commit it.
-- `~/.tauri/pureprivacy.key.pub` — the **public** key. Goes into the updater
+- `~/.tauri/privacy-lodge.key` — the **private** key. Never commit it.
+- `~/.tauri/privacy-lodge.key.pub` — the **public** key. Goes into the updater
   plugin config in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) —
   that file is owned by the app workstream, not this runbook.
 
@@ -36,7 +36,7 @@ Repo → **Settings → Secrets and variables → Actions → New repository sec
 
 | Secret | Value | Status |
 | --- | --- | --- |
-| `TAURI_SIGNING_PRIVATE_KEY` | contents of `~/.tauri/pureprivacy.key` | ready to set once keypair is generated |
+| `TAURI_SIGNING_PRIVATE_KEY` | contents of `~/.tauri/privacy-lodge.key` | ready to set once keypair is generated |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | the keypair password (empty if none) | same |
 | `APPLE_CERTIFICATE` | base64 of the Developer ID Application `.p12` | **blocked (G4)** |
 | `APPLE_CERTIFICATE_PASSWORD` | `.p12` password | **blocked (G4)** |
@@ -56,7 +56,7 @@ URLs, signatures) which it uploads as a release asset. The app's updater
 endpoint should point at:
 
 ```
-https://github.com/jaimetournesol/pureprivacy-desktop/releases/latest/download/latest.json
+https://github.com/jaimetournesol/privacy-lodge/releases/latest/download/latest.json
 ```
 
 Note: `latest.json` only resolves after the draft release is **published** —
@@ -67,7 +67,7 @@ drafts are not visible to the updater.
 1. **G4 — Apple Developer account** (~$99/yr): Developer ID Application
    certificate + notarization credentials. Until then, macOS builds are
    unsigned and Gatekeeper quarantines them (users must right-click → Open, or
-   `xattr -dr com.apple.quarantine PurePrivacy.app`).
+   `xattr -dr com.apple.quarantine Privacy Lodge.app`).
 2. **G5 — Azure Trusted Signing account**: signing account + certificate
    profile + service principal. Until then, Windows builds are unsigned and
    SmartScreen warns on install. When ready, also uncomment the

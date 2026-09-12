@@ -28,7 +28,7 @@ case "$(uname -s)" in
 esac
 
 # Reuse the proven fetcher, pointed at our staging dir instead of the user's runtime bin dir.
-PUREPRIVACY_BIN_DIR="$OUT" "$HERE/scripts/fetch-sidecars.sh" "$@"
+PRIVACY_LODGE_BIN_DIR="$OUT" "$HERE/scripts/fetch-sidecars.sh" "$@"
 
 # Self-hosted Element Call (feature J). Serving this from the box is what makes a call
 # box-only; without it the phone would have to fetch the bundle from call.element.io — a
@@ -55,7 +55,7 @@ fi
 # and by AGPL for Element Call / lk-jwt (whose source offer lives in THIRD-PARTY-LICENSES.md).
 cp -f "$HERE/THIRD-PARTY-LICENSES.md" "$OUT/" 2>/dev/null || true
 mkdir -p "$OUT/licenses" && cp -f "$HERE/licenses/"*.txt "$OUT/licenses/" 2>/dev/null || true
-cp -f "$HERE/LICENSE" "$OUT/LICENSE-PurePrivacy.txt" 2>/dev/null || true
+cp -f "$HERE/LICENSE" "$OUT/LICENSE-Privacy Lodge.txt" 2>/dev/null || true
 
 echo
 echo "staged into $OUT:"

@@ -23,12 +23,12 @@ jobs:
   build:
     # LINUX ONLY — deliberately, until the box can actually RUN elsewhere.
     #
-    # A PurePrivacy box is the app PLUS its sidecars, and the essential ones publish
+    # A Privacy Lodge box is the app PLUS its sidecars, and the essential ones publish
     # linux-gnu builds only: tuwunel (the Matrix homeserver — no box without it) and
     # lk-jwt-service; livekit has no darwin build either. A Windows/macOS installer would
     # therefore install a GUI shell that fails the moment setup starts services — worse than
     # shipping nothing, because it looks like a working product. Windows/macOS users run the
-    # box under Docker (jaimemelon/pureprivacy-box) and use the phone app as normal.
+    # box under Docker (jaimemelon/privacy-lodge-box) and use the phone app as normal.
     #
     # To bring a platform back: get real sidecar builds for it, add it to this matrix, and
     # teach scripts/stage-sidecars.sh to stage them (it already fails if tuwunel is missing).
@@ -158,7 +158,7 @@ jobs:
           # AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'PurePrivacy ${{ github.ref_name }}'
+          releaseName: 'Privacy Lodge ${{ github.ref_name }}'
           releaseBody: 'Draft release — see the assets to download and install this version.'
           releaseDraft: true
           prerelease: false

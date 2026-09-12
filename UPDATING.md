@@ -1,6 +1,6 @@
 # Updating your box without losing your settings
 
-Your PurePrivacy box keeps **all** of its identity and history in one place: its
+Your Privacy Lodge box keeps **all** of its identity and history in one place: its
 **data directory**. Updating means replacing the **app** — *never* the data directory.
 As long as you don't touch the data dir, an update keeps your **.onion address, your
 account, your paired contacts, and all your chats**.
@@ -11,9 +11,9 @@ Everything that matters is under the app-data directory (do **not** delete it):
 
 | OS | Path |
 | --- | --- |
-| Linux | `~/.local/share/ai.tournesol.pureprivacy/` |
-| macOS | `~/Library/Application Support/ai.tournesol.pureprivacy/` |
-| Windows | `%APPDATA%\ai.tournesol.pureprivacy\` |
+| Linux | `~/.local/share/ai.tournesol.privacylodge/` |
+| macOS | `~/Library/Application Support/ai.tournesol.privacylodge/` |
+| Windows | `%APPDATA%\ai.tournesol.privacylodge\` |
 
 The parts you must preserve:
 - **`tor/hs/`** — your `.onion` **identity** (private key). Lose it and your address
@@ -39,7 +39,7 @@ The parts you must preserve:
 2. **Get the new version.**
    - From source:
      ```bash
-     cd pureprivacy-desktop
+     cd privacy-lodge
      git pull
      pnpm install
      pnpm tauri build          # add --no-bundle for just the binary
@@ -66,12 +66,12 @@ new box can't start. On a machine running **one** box, clear any leftovers befor
 starting — **stop the supervisor first so it can't respawn them**, then the sidecars:
 
 ```bash
-pkill -x pureprivacy          # the supervisor — kill FIRST
+pkill -x privacy-lodge          # the supervisor — kill FIRST
 sleep 3
 for p in tor tuwunel caddy turnserver livekit-server lk-jwt-service; do pkill -x "$p"; done
 sleep 2
 # confirm none remain, then launch the app again — same data dir, same onion
-pgrep -x -l 'pureprivacy|tor|tuwunel|caddy|turnserver'
+pgrep -x -l 'privacy-lodge|tor|tuwunel|caddy|turnserver'
 ```
 
 Your data dir is untouched by any of this, so nothing is lost — you're only clearing
