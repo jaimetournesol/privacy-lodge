@@ -1,4 +1,4 @@
-# PurePrivacy box — containerized.
+# Privacy Lodge box — containerized.
 #
 # STAGE-1 image: reuses the prebuilt Tauri binary, which links webkit2gtk, so we run it
 # under a virtual display (Xvfb) — the GUI renders to nothing; only the supervisor matters.
@@ -25,16 +25,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Sidecars (tor, tuwunel, caddy, coturn, livekit-server, lk-jwt-service) + the box binary
 # are staged next to this Dockerfile by build.sh (kept out of git — large, host-built).
-COPY bin/ /opt/pureprivacy/bin/
-COPY pureprivacy /opt/pureprivacy/pureprivacy
-COPY entrypoint.sh /opt/pureprivacy/entrypoint.sh
-RUN chmod +x /opt/pureprivacy/pureprivacy /opt/pureprivacy/entrypoint.sh \
-    && chmod +x /opt/pureprivacy/bin/* 2>/dev/null || true
+COPY bin/ /opt/privacy-lodge/bin/
+COPY privacy-lodge /opt/privacy-lodge/privacy-lodge
+COPY entrypoint.sh /opt/privacy-lodge/entrypoint.sh
+RUN chmod +x /opt/privacy-lodge/privacy-lodge /opt/privacy-lodge/entrypoint.sh \
+    && chmod +x /opt/privacy-lodge/bin/* 2>/dev/null || true
 # The box spawns turnserver from its bin dir — point that at apt's coturn (correct libs).
-RUN ln -sf /usr/bin/turnserver /opt/pureprivacy/bin/turnserver
+RUN ln -sf /usr/bin/turnserver /opt/privacy-lodge/bin/turnserver
 
-ENV PUREPRIVACY_BIN_DIR=/opt/pureprivacy/bin \
-    PUREPRIVACY_DATA_DIR=/data \
+ENV PRIVACY_LODGE_BIN_DIR=/opt/privacy-lodge/bin \
+    PRIVACY_LODGE_DATA_DIR=/data \
     DISPLAY=:99 \
     WEBKIT_DISABLE_COMPOSITING_MODE=1 \
     LIBGL_ALWAYS_SOFTWARE=1
@@ -43,4 +43,4 @@ ENV PUREPRIVACY_BIN_DIR=/opt/pureprivacy/bin \
 # secrets, pairings). Mount a named volume here; losing it = losing the box.
 VOLUME /data
 
-ENTRYPOINT ["/opt/pureprivacy/entrypoint.sh"]
+ENTRYPOINT ["/opt/privacy-lodge/entrypoint.sh"]

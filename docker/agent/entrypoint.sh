@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PurePrivacy agent container entrypoint: Hermes WebUI (+ optionally the messaging gateway).
+# Privacy Lodge agent container entrypoint: Hermes WebUI (+ optionally the messaging gateway).
 #
 # Runs in the BOX's network namespace, so everything here binds loopback and nothing is
 # published. The WebUI is reached from the phone over a SECOND hidden service with tor v3
@@ -48,10 +48,10 @@ fi
 # ── Reachability of the box ─────────────────────────────────────────────────────────────
 # Not fatal: the agent is still useful (and configurable) before the homeserver answers,
 # and the box may still be minting its onion on a first run. Say so rather than crash-loop.
-if ! curl -sf --max-time 5 -o /dev/null "http://127.0.0.1:${PP_HOMESERVER_PORT:-8118}/_matrix/client/versions"; then
-  echo "[agent] note: tuwunel not answering on 127.0.0.1:${PP_HOMESERVER_PORT:-8118} yet." >&2
+if ! curl -sf --max-time 5 -o /dev/null "http://127.0.0.1:${PL_HOMESERVER_PORT:-8118}/_matrix/client/versions"; then
+  echo "[agent] note: tuwunel not answering on 127.0.0.1:${PL_HOMESERVER_PORT:-8118} yet." >&2
   echo "[agent]       Expected if the box is still starting, or if this container was not" >&2
-  echo "[agent]       started with --network container:pureprivacy-box." >&2
+  echo "[agent]       started with --network container:privacy-lodge-box." >&2
 fi
 
 pids=()
@@ -129,7 +129,7 @@ pids+=($!)
 if [ -d /handoff ]; then
   auth_watch() {
     while true; do
-      pp-auth-daemon || echo "[agent] auth watcher exited; restarting" >&2
+      pl-auth-daemon || echo "[agent] auth watcher exited; restarting" >&2
       sleep 5
     done
   }
@@ -187,7 +187,7 @@ ensure_workspace() {
 
   # terminal.cwd is bridged to TERMINAL_CWD, which the gateway reads for the terminal tool,
   # the code-exec tool, and relative-path resolution.
-  if ! pp-config-set "$cfg" terminal.cwd "$ws"; then
+  if ! pl-config-set "$cfg" terminal.cwd "$ws"; then
     echo "[agent] could not set the working root for '$lp'" >&2
   fi
 }
@@ -203,7 +203,7 @@ provision_profile() {
     # model that already works instead of an onboarding wizard the owner can't reach from
     # the Agents app. They can point it at a different provider afterwards in Agent settings.
     if ! /opt/hermes/venv/bin/hermes profile create "$lp" --clone --no-alias \
-         --description "PurePrivacy agent $lp" >/dev/null 2>&1; then
+         --description "Privacy Lodge agent $lp" >/dev/null 2>&1; then
       echo "[agent] could not create the Hermes profile for '$lp'" >&2
       return 1
     fi
@@ -215,12 +215,12 @@ provision_profile() {
   # For an OAuth provider (openai-codex, xai-oauth, qwen-oauth) there is no key to write:
   # Hermes holds its own OAuth session in auth.json and the owner finishes signing in from
   # Agent settings. We still record the provider so the profile opens on the right one.
-  local prov; prov="$(handoff_get "$env_file" PP_AGENT_PROVIDER)"
+  local prov; prov="$(handoff_get "$env_file" PL_AGENT_PROVIDER)"
   if [ -n "$prov" ]; then
     local mdl base key
-    mdl="$(handoff_get "$env_file" PP_AGENT_MODEL)"
-    base="$(handoff_get "$env_file" PP_AGENT_BASE_URL)"
-    key="$(handoff_get "$env_file" PP_AGENT_API_KEY)"
+    mdl="$(handoff_get "$env_file" PL_AGENT_MODEL)"
+    base="$(handoff_get "$env_file" PL_AGENT_BASE_URL)"
+    key="$(handoff_get "$env_file" PL_AGENT_API_KEY)"
     echo "[agent] '$lp' configured for provider '$prov'"
     # MERGE the model block — do not rewrite the file.
     #
@@ -232,7 +232,7 @@ provision_profile() {
     # model.api_key, NOT OPENAI_API_KEY in .env: Hermes host-gates OPENAI_API_KEY to
     # openai.com, so a key put there is silently dropped for any other endpoint and the
     # runtime falls through to "no-key-required" → 401. See docs/HANDOFF.
-    if ! pp-config-set --replace "$home/config.yaml" model \
+    if ! pl-config-set --replace "$home/config.yaml" model \
          "provider=$prov" "default=$mdl" "base_url=$base" "api_key=$key"; then
       echo "[agent] could not write config.yaml for '$lp'" >&2
       return 1
@@ -257,7 +257,7 @@ provision_profile() {
   # have to answer: an agent added from the phone has exactly one room, and the box just
   # created it. Only strip the key when we have a replacement, so a manual `/sethome`
   # survives on boxes whose handoff predates this.
-  local room; room="$(handoff_get "$env_file" PP_AGENT_ROOM)"
+  local room; room="$(handoff_get "$env_file" PL_AGENT_ROOM)"
   local owned="MATRIX_HOMESERVER|MATRIX_USER_ID|MATRIX_ACCESS_TOKEN|MATRIX_DEVICE_ID"
   owned="$owned|MATRIX_ALLOWED_USERS|MATRIX_E2EE_MODE|MATRIX_RECOVERY_KEY"
   owned="$owned|MATRIX_RECOVERY_KEY_OUTPUT_FILE"
@@ -276,7 +276,7 @@ provision_profile() {
       echo "MATRIX_USER_ID=$(handoff_get "$env_file" MATRIX_USER_ID)"
       echo "MATRIX_ACCESS_TOKEN=$(handoff_get "$env_file" MATRIX_ACCESS_TOKEN)"
       echo "MATRIX_DEVICE_ID=$(handoff_get "$env_file" MATRIX_DEVICE_ID)"
-      echo "MATRIX_ALLOWED_USERS=$(handoff_get "$env_file" PP_OWNER)"
+      echo "MATRIX_ALLOWED_USERS=$(handoff_get "$env_file" PL_OWNER)"
       echo "MATRIX_E2EE_MODE=required"
       echo "$rec_line"
       if [ -n "$room" ]; then echo "MATRIX_HOME_ROOM=$room"; fi
@@ -354,7 +354,7 @@ gateway_watch() {
         set -a; . /handoff/matrix.env; set +a
         # Only the owner may talk to the agent. Without this the adapter's default gating
         # applies, and on a federated box that is not a boundary we want to leave to chance.
-        export MATRIX_ALLOWED_USERS="${PP_OWNER:-}"
+        export MATRIX_ALLOWED_USERS="${PL_OWNER:-}"
         # E2EE: required, not optional. Everything else on the box is end-to-end encrypted,
         # and an agent conversation carries exactly the kind of content that shouldn't be
         # the one plaintext exception. "optional" would silently fall back to cleartext when
@@ -365,10 +365,10 @@ gateway_watch() {
         # "📬 No home channel is set for Matrix" and asks the owner to run /sethome, which
         # they should never have to: the box created the one room this agent has. Same
         # reasoning as the secondary-profile path in provision_profile.
-        if [ -n "${PP_AGENT_ROOM:-}" ]; then export MATRIX_HOME_ROOM="$PP_AGENT_ROOM"; fi
+        if [ -n "${PL_AGENT_ROOM:-}" ]; then export MATRIX_HOME_ROOM="$PL_AGENT_ROOM"; fi
         # The first agent's working root, on the volume — see ensure_workspace.
-        ensure_workspace "${PP_AGENT_LOCALPART:-hermes-ai}" "$HERMES_HOME/config.yaml"
-        export TERMINAL_CWD="$WORKSPACE_ROOT/${PP_AGENT_LOCALPART:-hermes-ai}"
+        ensure_workspace "${PL_AGENT_LOCALPART:-hermes-ai}" "$HERMES_HOME/config.yaml"
+        export TERMINAL_CWD="$WORKSPACE_ROOT/${PL_AGENT_LOCALPART:-hermes-ai}"
 
         # ── What the agent may send back as a file ──────────────────────────────────────
         # The agent CAN send files: it writes `MEDIA:<path>` and the gateway uploads it

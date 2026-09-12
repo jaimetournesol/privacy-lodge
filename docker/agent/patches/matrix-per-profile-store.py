@@ -16,7 +16,7 @@ default profile's.
 
 WHY IT MATTERS HERE
 -------------------
-A PurePrivacy box runs several agents as `gateway.multiplex_profiles` profiles, each a
+A Privacy Lodge box runs several agents as `gateway.multiplex_profiles` profiles, each a
 separate Matrix account on the box's own homeserver. With a shared crypto.db, agent #2
 loads agent #1's olm account, `/keys/query` for its own mxid disagrees with the local
 identity keys, and `_connect()` returns False. `_start_one_profile_adapters` counts zero
@@ -49,7 +49,7 @@ OLD = (
 NEW = '''class _PerProfilePath:
     """A Path that re-resolves against the CURRENT profile's HERMES_HOME on every use.
 
-    PurePrivacy patch — see docker/agent/patches/matrix-per-profile-store.py.
+    Privacy Lodge patch — see docker/agent/patches/matrix-per-profile-store.py.
     Upstream resolved these paths at import time, so every multiplexed profile shared
     the first profile's olm account. The comment above says each profile gets its own
     store; this makes that true.

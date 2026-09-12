@@ -49,7 +49,7 @@ ANCHOR = '''            except Exception as e:
 '''
 
 CALL = '''
-            # PurePrivacy: put it where the agent actually works. See
+            # Privacy Lodge: put it where the agent actually works. See
             # docker/agent/patches/matrix-media-to-workspace.py.
             if cached_path:
                 try:

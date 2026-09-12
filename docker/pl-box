@@ -1,76 +1,85 @@
 #!/usr/bin/env bash
-# pp-box — one command to run and manage a PurePrivacy box in Docker.
+# pl-box — one command to run and manage a Privacy Lodge box in Docker.
 #
 # A box is reached only through its .onion (outbound Tor), so there are NO ports to
 # publish. Its whole identity — onion key, admin account, secrets.json, pairings — lives
-# in one named volume (pureprivacy-data). Lose that volume and the box is gone for good,
-# so `pp-box backup` exists; use it.
+# in one named volume (privacy-lodge-data). Lose that volume and the box is gone for good,
+# so `pl-box backup` exists; use it.
 #
-#   ./pp-box init            create your .env (admin user/pass + a fresh secrets key)
-#   ./pp-box build           build the image from the staged binary + sidecars
-#   ./pp-box up              start the box (detached); mints its onion on first run
-#   ./pp-box qr              print the phone-connect QR (scan it in the app)
-#   ./pp-box status          running? onion, health, uptime
-#   ./pp-box logs            follow the logs (Ctrl-C to stop watching)
-#   ./pp-box restart         restart the box
-#   ./pp-box down            stop the box (identity is kept in the volume)
-#   ./pp-box update [<ver>]  update the box, keeping its identity. Docker-Hub install:
+#   ./pl-box init            create your .env (admin user/pass + a fresh secrets key)
+#   ./pl-box build           build the image from the staged binary + sidecars
+#   ./pl-box up              start the box (detached); mints its onion on first run
+#   ./pl-box qr              print the phone-connect QR (scan it in the app)
+#   ./pl-box status          running? onion, health, uptime
+#   ./pl-box logs            follow the logs (Ctrl-C to stop watching)
+#   ./pl-box restart         restart the box
+#   ./pl-box down            stop the box (identity is kept in the volume)
+#   ./pl-box update [<ver>]  update the box, keeping its identity. Docker-Hub install:
 #                            pull <ver> (or refresh the current tag), pin it in .env,
 #                            recreate. Source install: rebuild the image + recreate
-#   ./pp-box backup [dir] [--encrypt]
+#   ./pl-box migrate-env     rename the PP_* keys of a pre-rename .env to PL_* (once; keeps a backup)
+#   ./pl-box backup [dir] [--encrypt]
 #                            bundle the box + agents (onion key, secrets, pairings) — DO THIS
 #                            --encrypt seals it with a passphrase (AES-256-GCM); without the
 #                            passphrase the file is noise — including to you, so don't lose it
-#   ./pp-box restore <file>  restore a backup (box must be down; old + encrypted both work)
-#   ./pp-box agents on|off   install / remove the optional agents add-on (separate image)
-#   ./pp-box agents ui       open the Hermes Web UI in a browser on THIS machine (tunnel)
-#   ./pp-box shell           open a shell inside the container
-#   ./pp-box destroy         remove the box AND its volume (irreversible; asks first)
+#   ./pl-box restore <file>  restore a backup (box must be down; old + encrypted both work)
+#   ./pl-box agents on|off   install / remove the optional agents add-on (separate image)
+#   ./pl-box agents ui       open the Hermes Web UI in a browser on THIS machine (tunnel)
+#   ./pl-box shell           open a shell inside the container
+#   ./pl-box destroy         remove the box AND its volume (irreversible; asks first)
 #
 set -euo pipefail
 export MSYS_NO_PATHCONV=1                     # Git Bash (Windows): don't rewrite container -v paths
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"                                    # so `docker compose` uses this dir's file + .env
-# Per-install volume name. `pp-box init` writes a unique PP_VOLUME into .env so two boxes on
+# Rename (0.2.0): .env keys are PL_*; a pre-rename install's file says PP_*. Every read here
+# tries both, so status/qr/backup keep working on an un-migrated install. compose does NOT
+# read PP_* — which is why the commands that go through compose refuse until `migrate-env`.
+envkey() {
+  local v; v="$(grep -E "^PL_$1=" "$HERE/.env" 2>/dev/null | head -1 || true)"
+  [ -n "$v" ] || v="$(grep -E "^PP_$1=" "$HERE/.env" 2>/dev/null | head -1 || true)"
+  printf '%s' "${v#*=}"
+}
+# Per-install volume name. `pl-box init` writes a unique PL_VOLUME into .env so two boxes on
 # one host can't collide. CRITICAL: this volume holds the onion key — it must resolve to the
 # SAME name for the life of the box, or you get a new, empty box. Installs made before
-# PP_VOLUME existed have no such line, so they fall back to the original fixed name.
+# PL_VOLUME existed have no such line, so they fall back to the original fixed name.
 # `|| true`: with `set -o pipefail`, sed exits 2 when .env doesn't exist yet and that
 # status propagates out of the substitution, so `set -e` killed the script before it could
 # even print help. A box that hasn't been init'd is the NORMAL state on a fresh clone.
-VOLUME="$(sed -n 's/^PP_VOLUME=//p' "$HERE/.env" 2>/dev/null | head -1 || true)"
-[ -n "$VOLUME" ] || VOLUME="pureprivacy-data"
+VOLUME="$(envkey VOLUME)"
+[ -n "$VOLUME" ] || VOLUME="privacy-lodge-data"
 # The agents add-on keeps its state in two more volumes, and they are NOT optional to a
 # backup: agent-data holds the model API keys + every agent profile + the session
 # transcripts, and handoff holds the agent's Matrix credentials. Backing up only the box
 # volume loses all of that silently, which is exactly how a "restored" box comes back
 # with its identity intact and its agents gone.
-AGENT_VOLUME="$(sed -n 's/^PP_AGENT_VOLUME=//p' "$HERE/.env" 2>/dev/null | head -1 || true)"
-[ -n "$AGENT_VOLUME" ] || AGENT_VOLUME="pureprivacy-agent-data"
-HANDOFF_VOLUME="$(sed -n 's/^PP_AGENT_HANDOFF_VOLUME=//p' "$HERE/.env" 2>/dev/null | head -1 || true)"
-[ -n "$HANDOFF_VOLUME" ] || HANDOFF_VOLUME="pureprivacy-agent-handoff"
-# The image THIS install runs. compose reads PP_IMAGE from .env (install.sh writes it for a
+AGENT_VOLUME="$(envkey AGENT_VOLUME)"
+[ -n "$AGENT_VOLUME" ] || AGENT_VOLUME="privacy-lodge-agent-data"
+HANDOFF_VOLUME="$(envkey AGENT_HANDOFF_VOLUME)"
+[ -n "$HANDOFF_VOLUME" ] || HANDOFF_VOLUME="privacy-lodge-agent-handoff"
+# The image THIS install runs. compose reads PL_IMAGE from .env (install.sh writes it for a
 # Docker-Hub install); anything here that runs a one-off container from the box image —
-# pp-crypt for encrypted backups — must resolve the same name, or a Hub install would
-# `docker run pureprivacy-box:dev`: an image it never built.
-IMAGE="${IMAGE:-$(sed -n 's/^PP_IMAGE=//p' "$HERE/.env" 2>/dev/null | head -1 || true)}"
-[ -n "$IMAGE" ] || IMAGE="pureprivacy-box:dev"
+# pl-crypt for encrypted backups — must resolve the same name, or a Hub install would
+# `docker run privacy-lodge-box:dev`: an image it never built.
+IMAGE="${IMAGE:-$(envkey IMAGE)}"
+[ -n "$IMAGE" ] || IMAGE="privacy-lodge-box:dev"
 # Agents are an OPTIONAL add-on in a separate image, gated behind a compose profile, so a
-# plain box never pulls or runs them. PP_AGENTS=1 in .env turns the profile on for every
+# plain box never pulls or runs them. PL_AGENTS=1 in .env turns the profile on for every
 # compose call — that single switch is what "installed" means.
-agents_on() { [ "$(sed -n 's/^PP_AGENTS=//p' "$HERE/.env" 2>/dev/null | head -1 || true)" = "1" ]; }
+agents_on() { [ "$(envkey AGENTS)" = "1" ]; }
 DC() {
   if agents_on; then docker compose --profile agents "$@"; else docker compose "$@"; fi
 }
-# pp-crypt seals/opens encrypted backup bundles with the box's own crypto code. Resolve it
+# pl-crypt seals/opens encrypted backup bundles with the box's own crypto code. Resolve it
 # from: an explicit override, a repo checkout next to this script (dev/CI), or the box
-# image (the normal case for an installed pp-box — the binary ships in the image).
-pp_crypt() { # $1=seal|open ; stdin->stdout ; passphrase in $PP_PASSPHRASE
-  if [ -n "${PP_CRYPT:-}" ] && [ -x "${PP_CRYPT:-}" ]; then
-    "$PP_CRYPT" "$1"; return
+# image (the normal case for an installed pl-box — the binary ships in the image).
+pp_crypt() { # $1=seal|open ; stdin->stdout ; passphrase in $PL_PASSPHRASE
+  if [ -n "${PL_CRYPT:-}" ] && [ -x "${PL_CRYPT:-}" ]; then
+    "$PL_CRYPT" "$1"; return
   fi
   local c
-  for c in "$HERE/../src-tauri/target/release/pp-crypt" "$HERE/../src-tauri/target/debug/pp-crypt"; do
+  for c in "$HERE/../src-tauri/target/release/pl-crypt" "$HERE/../src-tauri/target/debug/pl-crypt"; do
     if [ -x "$c" ]; then "$c" "$1"; return; fi
   done
   # -i (not -it): stdin/stdout are the data path. Passphrase via env, NOT argv — argv is
@@ -78,45 +87,60 @@ pp_crypt() { # $1=seal|open ; stdin->stdout ; passphrase in $PP_PASSPHRASE
   # image's ENTRYPOINT is entrypoint.sh, which ignores its arguments and boots a whole box
   # (Xvfb, tor, tuwunel) — without the override this hung forever with the bundle on the
   # box's stdin, left an orphan container running, and wrote the web-setup banner to .enc.
-  docker run --rm -i --entrypoint /opt/pureprivacy/bin/pp-crypt \
-    -e PP_PASSPHRASE -e PP_META_CREATED "$IMAGE" "$1"
+  docker run --rm -i --entrypoint /opt/privacy-lodge/bin/pl-crypt \
+    -e PL_PASSPHRASE -e PL_META_CREATED "$IMAGE" "$1"
 }
 
 die() { echo "error: $*" >&2; exit 1; }
-have_env() { [ -f "$HERE/.env" ] || die "no .env yet — run: ./pp-box init"; }
+# compose reads .env directly and only knows PL_*. Running `up` against a PP_* file would
+# resolve PL_VOLUME to the DEFAULT — a new, empty volume: a new box, silently. Refuse.
+need_migrated_keys() {
+  if grep -qE '^PP_' "$HERE/.env" 2>/dev/null && ! grep -qE '^PL_VOLUME=' "$HERE/.env" 2>/dev/null; then
+    die ".env still uses the pre-rename PP_* keys — run:  ./pl-box migrate-env   (renames the keys, keeps a backup)"
+  fi
+}
+# A pre-rename image expects PP_*/PUREPRIVACY_* from the container env and a box binary at
+# /opt/pureprivacy; this kit hands it neither. Move to the Privacy Lodge image first.
+refuse_old_image() {
+  local img; img="$(envkey IMAGE)"; [ -n "$img" ] || return 0
+  case "$img" in *pureprivacy*)
+    die "PL_IMAGE=$img is a pre-rename image — run:  ./pl-box update 0.2.0   (pulls the Privacy Lodge image; same volume, same onion)";;
+  esac
+}
+have_env() { [ -f "$HERE/.env" ] || die "no .env yet — run: ./pl-box init"; }
 # Both helpers are failure-tolerant (return "" not an error) so a not-yet-minted onion or a
 # missing key never trips `set -e` in a status/qr call.
-envval() { local v; v="$(grep -E "^$1=" "$HERE/.env" 2>/dev/null | head -1 || true)"; printf '%s' "${v#*=}"; }
+envval() { envkey "${1#PL_}"; }
 # Set (or add) KEY=VALUE in .env in place. .env is chmod 600; GNU sed -i keeps the mode.
 setenv() {
   if grep -qE "^$1=" "$HERE/.env" 2>/dev/null; then sed -i "s|^$1=.*|$1=$2|" "$HERE/.env"
   else printf '%s=%s\n' "$1" "$2" >> "$HERE/.env"; fi
 }
-# "jaimemelon/pureprivacy-box:0.1.10" -> "jaimemelon/pureprivacy-box". Only the LAST path
-# element may carry a tag — "127.0.0.1:5000/pp-box" has a colon in the registry, not a tag.
+# "jaimemelon/privacy-lodge-box:0.1.10" -> "jaimemelon/privacy-lodge-box". Only the LAST path
+# element may carry a tag — "127.0.0.1:5000/pl-box" has a colon in the registry, not a tag.
 image_repo() { local last="${1##*/}"; case "$last" in *:*) printf '%s' "${1%:*}" ;; *) printf '%s' "$1" ;; esac; }
 # A registry image has a namespace ("jaimemelon/…", "127.0.0.1:5000/…"); a local build
-# ("pureprivacy-box:dev") has none. This is what tells a Docker-Hub install from a source one.
+# ("privacy-lodge-box:dev") has none. This is what tells a Docker-Hub install from a source one.
 is_registry_image() { case "$1" in */*) return 0 ;; *) return 1 ;; esac; }
 onion() {
-  local j; j="$(docker exec pureprivacy-box sh -c 'cat /data/box.json 2>/dev/null' 2>/dev/null || true)"
+  local j; j="$(docker exec privacy-lodge-box sh -c 'cat /data/box.json 2>/dev/null' 2>/dev/null || true)"
   printf '%s' "$j" | sed -n 's/.*"onion"[^"]*"\([a-z2-7]*\.onion\)".*/\1/p' | head -1
 }
 # The box's actual username. In the interactive web-setup flow it's chosen in the browser,
 # so read it from box.json (the source of truth); fall back to the .env default otherwise.
 boxuser() {
-  local j u; j="$(docker exec pureprivacy-box sh -c 'cat /data/box.json 2>/dev/null' 2>/dev/null || true)"
+  local j u; j="$(docker exec privacy-lodge-box sh -c 'cat /data/box.json 2>/dev/null' 2>/dev/null || true)"
   u="$(printf '%s' "$j" | sed -n 's/.*"username"[^"]*"\([^"]*\)".*/\1/p' | head -1)"
-  [ -n "$u" ] && printf '%s' "$u" || envval PP_USER
+  [ -n "$u" ] && printf '%s' "$u" || envval PL_USER
 }
 # Interactive web setup when no admin password is baked into .env.
-is_interactive() { [ -z "$(envval PP_PASS)" ]; }
+is_interactive() { [ -z "$(envval PL_PASS)" ]; }
 
 cmd="${1:-help}"; shift || true
 case "$cmd" in
   init)
     if [ -f "$HERE/.env" ] && [ "${1:-}" != "--force" ]; then
-      die ".env already exists (use: ./pp-box init --force to overwrite — this rotates the secrets key!)"
+      die ".env already exists (use: ./pl-box init --force to overwrite — this rotates the secrets key!)"
     fi
     read -rp "Box name [mybox]: " b; b="${b:-mybox}"
     echo "You can set your username + password in the browser after starting the box"
@@ -136,40 +160,40 @@ case "$cmd" in
     key="$(openssl rand -base64 32)"
     # Unique per-install volume name, generated ONCE here and pinned in .env. Keeps two boxes
     # on one host from colliding. It must never change afterwards — it holds the onion key.
-    vol="pureprivacy-data-$(openssl rand -hex 4)"
+    vol="privacy-lodge-data-$(openssl rand -hex 4)"
     umask 077
     cat > "$HERE/.env" <<EOF
-# PurePrivacy box config — read automatically by docker compose. KEEP THIS PRIVATE.
-# PP_SECRETS_KEY decrypts secrets.json; it must stay the SAME across restarts. If you
+# Privacy Lodge box config — read automatically by docker compose. KEEP THIS PRIVATE.
+# PL_SECRETS_KEY decrypts secrets.json; it must stay the SAME across restarts. If you
 # ever lose it you cannot decrypt the box's secrets — back it up with the volume.
-# PP_VOLUME is THIS box's data volume (onion key + account + pairings). Never change it:
+# PL_VOLUME is THIS box's data volume (onion key + account + pairings). Never change it:
 # a different name means a different (empty) box. Back this file up with your volume.
-PP_USER=$u
-PP_BOX=$b
-PP_PASS=$p
-PP_SECRETS_KEY=$key
-PP_VOLUME=$vol
-# Agents add-on: 1 = the 'agents' compose profile is on for every pp-box command.
-# Change it with:  ./pp-box agents on|off   (never by hand while the box is running).
-PP_AGENTS=$agents
+PL_USER=$u
+PL_BOX=$b
+PL_PASS=$p
+PL_SECRETS_KEY=$key
+PL_VOLUME=$vol
+# Agents add-on: 1 = the 'agents' compose profile is on for every pl-box command.
+# Change it with:  ./pl-box agents on|off   (never by hand while the box is running).
+PL_AGENTS=$agents
 EOF
     echo "✓ this box's data volume: $vol   (recorded in .env — keep it)"
     # A volume from an earlier install may still be on this host. Be explicit that this new box
     # will NOT adopt it (a different volume = a different, empty box) and how to reuse it on
     # purpose — silently pointing elsewhere is how people think they've lost their onion.
-    if docker volume inspect pureprivacy-data >/dev/null 2>&1; then
+    if docker volume inspect pureprivacy-data >/dev/null 2>&1 || docker volume inspect privacy-lodge-data >/dev/null 2>&1; then
       echo
-      echo "  NOTE: a 'pureprivacy-data' volume from an earlier install is still on this host."
+      echo "  NOTE: a default-named volume (pureprivacy-data / privacy-lodge-data) from an earlier install is still on this host."
       echo "        This box will use '$vol' and leave that one untouched."
       echo "        If you actually meant to keep using that older box, stop now and set"
-      echo "        PP_VOLUME=pureprivacy-data in .env before running './pp-box up'."
+      echo "        PL_VOLUME=privacy-lodge-data in .env before running './pl-box up'."
       echo
     fi
     # build + init are independent; only tell them to build if the image isn't there yet.
     if docker image inspect "$IMAGE" >/dev/null 2>&1; then
-      echo "✓ wrote .env (chmod 600). Next: ./pp-box up"
+      echo "✓ wrote .env (chmod 600). Next: ./pl-box up"
     else
-      echo "✓ wrote .env (chmod 600). Next: ./pp-box build   (then: ./pp-box up)"
+      echo "✓ wrote .env (chmod 600). Next: ./pl-box build   (then: ./pl-box up)"
     fi
     ;;
 
@@ -178,62 +202,62 @@ EOF
     ;;
 
   up|start)
-    have_env
+    have_env; need_migrated_keys; refuse_old_image
     DC up -d
     if is_interactive; then
       echo "✓ box starting. Finish setup in your browser:"
       echo ""
       echo "      http://127.0.0.1:8470/"
       echo ""
-      echo "  Choose a username + password there, then scan the QR with the PurePrivacy"
+      echo "  Choose a username + password there, then scan the QR with the Privacy Lodge"
       echo "  phone app. The setup page closes itself once your phone signs in."
     else
-      echo "✓ box starting. Watch it mint its onion + print the QR:  ./pp-box logs"
-      echo "  once it's up:  ./pp-box qr"
+      echo "✓ box starting. Watch it mint its onion + print the QR:  ./pl-box logs"
+      echo "  once it's up:  ./pl-box qr"
     fi
     ;;
 
   qr)
     have_env
     o="$(onion)"; u="$(boxuser)"
-    [ -n "$o" ] || die "no onion yet — the box is still minting it (give it a minute), or it isn't running (./pp-box up)"
+    [ -n "$o" ] || die "no onion yet — the box is still minting it (give it a minute), or it isn't running (./pl-box up)"
     # LOGIN/setup handoff — the phone pre-fills onion + user on its sign-in screen. NOT the
-    # contact form (pureprivacy:@user:onion), which a not-yet-signed-in phone stashes as a
+    # contact form (privacy-lodge:@user:onion), which a not-yet-signed-in phone stashes as a
     # pending contact and bounces back to login.
-    payload="pureprivacy://connect?hs=${o}&user=${u}"
-    echo "Scan this in the PurePrivacy phone app to sign in (then type your box password):"
+    payload="privacybolt://connect?hs=${o}&user=${u}"
+    echo "Scan this in the Privacy Bolt app to sign in (then type your box password):"
     echo "  box: @${u}:${o}"
-    docker exec pureprivacy-box qrencode -t ANSIUTF8 "$payload" 2>/dev/null || true
+    docker exec privacy-lodge-box qrencode -t ANSIUTF8 "$payload" 2>/dev/null || true
     # Terminal QRs don't always camera-scan (line spacing / font). Also write a PNG that
     # reliably does — open connect-qr.png in any image viewer and scan that.
-    if docker exec pureprivacy-box qrencode -o /tmp/pp-qr.png -s 8 -m 4 "$payload" 2>/dev/null \
-       && docker cp pureprivacy-box:/tmp/pp-qr.png "$HERE/connect-qr.png" >/dev/null 2>&1; then
+    if docker exec privacy-lodge-box qrencode -o /tmp/pp-qr.png -s 8 -m 4 "$payload" 2>/dev/null \
+       && docker cp privacy-lodge-box:/tmp/pp-qr.png "$HERE/connect-qr.png" >/dev/null 2>&1; then
       echo "If the code above won't scan, open  connect-qr.png  (in this folder) and scan that."
     fi
     ;;
 
   status)
-    if ! docker ps --format '{{.Names}}' | grep -qx pureprivacy-box; then
-      echo "● box: not running   (start it: ./pp-box up)"; exit 0
+    if ! docker ps --format '{{.Names}}' | grep -qx privacy-lodge-box; then
+      echo "● box: not running   (start it: ./pl-box up)"; exit 0
     fi
-    up="$(docker ps --filter name=pureprivacy-box --format '{{.Status}}')"
+    up="$(docker ps --filter name=privacy-lodge-box --format '{{.Status}}')"
     o="$(onion)"; u="$(boxuser)"
     echo "● box: running   ($up)"
     echo "  user:  @${u}:${o:-<minting onion…>}"
-    echo "  image: $(docker inspect pureprivacy-box --format '{{.Config.Image}}' 2>/dev/null || envval PP_IMAGE)"
-    echo "  volume: $VOLUME   (identity lives here — back it up: ./pp-box backup)"
+    echo "  image: $(docker inspect privacy-lodge-box --format '{{.Config.Image}}' 2>/dev/null || envval PL_IMAGE)"
+    echo "  volume: $VOLUME   (identity lives here — back it up: ./pl-box backup)"
     ;;
 
   logs)   DC logs -f --tail=200 ;;
-  restart) DC restart; echo "✓ restarted" ;;
-  down|stop) DC down; echo "✓ stopped (identity kept in the $VOLUME volume)" ;;
+  restart) need_migrated_keys; refuse_old_image; DC restart; echo "✓ restarted" ;;
+  down|stop) need_migrated_keys; DC down; echo "✓ stopped (identity kept in the $VOLUME volume)" ;;
 
   update)
-    have_env
+    have_env; need_migrated_keys
     ver="${1:-}"
-    img="$(envval PP_IMAGE)"
+    img="$(envval PL_IMAGE)"
     if is_registry_image "$img"; then
-      # A Docker-Hub install (install.sh writes PP_IMAGE=jaimemelon/pureprivacy-box:<tag>).
+      # A Docker-Hub install (install.sh writes PL_IMAGE=jaimemelon/privacy-lodge-box:<tag>).
       # PULL, don't build: build.sh needs a Tauri build that exists on no user's machine, and
       # a bare `docker pull <image>:<ver>` before this command never reached the box either —
       # compose keeps running whatever tag .env names (a versioned pull doesn't retag :latest,
@@ -244,15 +268,15 @@ EOF
       new_box="$img"; [ -n "$ver" ] && new_box="$(image_repo "$img"):$ver"
       new_agent=""
       if agents_on; then
-        ai="$(envval PP_AGENT_IMAGE)"; [ -n "$ai" ] || ai="jaimemelon/pureprivacy-agent:latest"
+        ai="$(envval PL_AGENT_IMAGE)"; [ -n "$ai" ] || ai="jaimemelon/privacy-lodge-agent:latest"
         if is_registry_image "$ai"; then new_agent="$ai"; [ -n "$ver" ] && new_agent="$(image_repo "$ai"):$ver"; fi
       fi
       echo "→ pulling $new_box"; docker pull "$new_box" >/dev/null || die "couldn't pull $new_box — nothing changed"
       if [ -n "$new_agent" ]; then
         echo "→ pulling $new_agent"; docker pull "$new_agent" >/dev/null || die "couldn't pull $new_agent — nothing changed"
       fi
-      setenv PP_IMAGE "$new_box"
-      [ -n "$new_agent" ] && setenv PP_AGENT_IMAGE "$new_agent"
+      setenv PL_IMAGE "$new_box"
+      [ -n "$new_agent" ] && setenv PL_AGENT_IMAGE "$new_agent"
       DC up -d --force-recreate
       echo "✓ updated to $new_box${new_agent:+ + $new_agent} — same volume, same onion, same account"
     else
@@ -263,18 +287,31 @@ EOF
     fi
     ;;
 
+  migrate-env)
+    have_env
+    # Rename (0.2.0): rename the KEYS in place — values untouched, backup kept — so compose and
+    # pl-box read the same file. Idempotent. The image is NOT switched here; `update 0.2.0` does
+    # that deliberately (it pulls, pins, and recreates on the same volume).
+    if ! grep -qE '^PP_' "$HERE/.env"; then echo "✓ .env already uses PL_* keys"; exit 0; fi
+    cp -p "$HERE/.env" "$HERE/.env.bak-$(date +%s)"
+    sed -i -E 's/^PP_([A-Z_]+=)/PL_\1/' "$HERE/.env"
+    echo "✓ renamed PP_* → PL_* in .env (previous copy kept as .env.bak-<time>)"
+    img="$(envkey IMAGE)"
+    case "$img" in *pureprivacy*) echo "  next:  ./pl-box update 0.2.0   (moves $img to the Privacy Lodge image — same volume, same onion)";; esac
+    ;;
+
   backup)
     docker volume inspect "$VOLUME" >/dev/null 2>&1 || die "no $VOLUME volume yet (has the box ever run?)"
     # `backup [dir] [--encrypt]` in either order. --encrypt seals the bundle with a
-    # passphrase (pp-crypt: PBKDF2 -> AES-256-GCM, the box's own crypto code) — what lands
-    # on disk is then useless without it. Passphrase from $PP_BACKUP_PASSPHRASE, or
+    # passphrase (pl-crypt: PBKDF2 -> AES-256-GCM, the box's own crypto code) — what lands
+    # on disk is then useless without it. Passphrase from $PL_BACKUP_PASSPHRASE, or
     # prompted twice. NOT the default (yet): a passphrase the owner forgets turns every
     # backup into noise, which for an irreplaceable onion key is the worse failure.
     dir=""; encrypt=0
     for a in "$@"; do case "$a" in --encrypt) encrypt=1 ;; *) dir="$a" ;; esac; done
     dir="${dir:-$HERE/backups}"; mkdir -p "$dir"
     if [ "$encrypt" = 1 ]; then
-      pass="${PP_BACKUP_PASSPHRASE:-}"
+      pass="${PL_BACKUP_PASSPHRASE:-}"
       if [ -z "$pass" ]; then
         read -rsp "Backup passphrase (min 8 chars): " pass; echo
         read -rsp "Again: " pass2; echo
@@ -289,8 +326,8 @@ EOF
     [ -n "$o" ] || o="$(docker run --rm -v "$VOLUME":/d:ro alpine sh -c 'cat /d/box.json 2>/dev/null' 2>/dev/null \
         | sed -n 's/.*"onion"[^"]*"\([a-z2-7]*\.onion\)".*/\1/p' | head -1)"
     tag="${o%%.onion}"; tag="${tag:0:12}"; [ -n "$tag" ] || tag="box"
-    n=1; while [ -e "$dir/pp-box-$tag-$n.tgz" ]; do n=$((n+1)); done
-    out="$dir/pp-box-$tag-$n.tgz"; base="$(basename "$out")"
+    n=1; while [ -e "$dir/pl-box-$tag-$n.tgz" ]; do n=$((n+1)); done
+    out="$dir/pl-box-$tag-$n.tgz"; base="$(basename "$out")"
     # Mount whichever agent volumes actually exist. A plain box has none and the bundle
     # simply won't contain them — restore keys off the MANIFEST, not off guesswork.
     mounts=(-v "$VOLUME":/v/box:ro)
@@ -301,11 +338,11 @@ EOF
     if docker volume inspect "$HANDOFF_VOLUME" >/dev/null 2>&1; then
       mounts+=(-v "$HANDOFF_VOLUME":/v/agent-handoff:ro); have_handoff=yes
     fi
-    # secrets.json in the volume is ENCRYPTED with PP_SECRETS_KEY, which lives in .env and
+    # secrets.json in the volume is ENCRYPTED with PL_SECRETS_KEY, which lives in .env and
     # NOT in any volume. A backup without it restores an identity the box can't unlock — so
     # the key travels with the bundle. This does not widen the blast radius: the onion
     # private key is already in here, and that alone is enough to impersonate the box.
-    key="$(envval PP_SECRETS_KEY)"; user="$(envval PP_USER)"
+    key="$(envval PL_SECRETS_KEY)"; user="$(envval PL_USER)"
     # `|| true` on the two optional lines is NOT decorative: an assignment's exit status is
     # that of its LAST command substitution, so on a plain box (no handoff volume — e.g. the
     # README's bare `docker run` install) `[ no = yes ] && echo` returned 1 and `set -e`
@@ -340,11 +377,11 @@ secrets_key=$key"
       # The header carries a timestamp, not the onion: the filename's 12-char tag is enough
       # to tell backups apart, and the full address in the clear on a cloud drive would link
       # that account to the box.
-      if ! PP_PASSPHRASE="$pass" PP_META_CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      if ! PL_PASSPHRASE="$pass" PL_META_CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
           pp_crypt seal < "$out" > "$out.enc"; then
         rm -f "$out.enc"; die "encryption failed — the unencrypted bundle is kept at $out"
       fi
-      if ! PP_PASSPHRASE="$pass" pp_crypt open < "$out.enc" | cmp -s - "$out"; then
+      if ! PL_PASSPHRASE="$pass" pp_crypt open < "$out.enc" | cmp -s - "$out"; then
         rm -f "$out.enc"; die "encrypted bundle failed its read-back check — unencrypted bundle kept at $out"
       fi
       chmod 600 "$out.enc"
@@ -362,19 +399,19 @@ secrets_key=$key"
     ;;
 
   restore)
-    file="${1:-}"; [ -f "$file" ] || die "usage: ./pp-box restore <backup.tgz>"
-    if docker ps --format '{{.Names}}' | grep -qx pureprivacy-box; then
-      die "stop the box first so the restore is clean:  ./pp-box down"
+    file="${1:-}"; [ -f "$file" ] || die "usage: ./pl-box restore <backup.tgz>"
+    if docker ps --format '{{.Names}}' | grep -qx privacy-lodge-box; then
+      die "stop the box first so the restore is clean:  ./pl-box down"
     fi
-    # Encrypted bundle? The pp-crypt header is line 1 (grep the LINE, not a byte prefix —
+    # Encrypted bundle? The pl-crypt header is line 1 (grep the LINE, not a byte prefix —
     # serde alphabetises the JSON keys, so the file doesn't start with "ppcrypt").
     # Decrypt to a private temp file and fall through to the normal restore below.
     if head -c 512 "$file" | head -1 | grep -q '"ppcrypt":1'; then
-      pass="${PP_BACKUP_PASSPHRASE:-}"
+      pass="${PL_BACKUP_PASSPHRASE:-}"
       if [ -z "$pass" ]; then read -rsp "Backup passphrase: " pass; echo; fi
       tmpdir="$(mktemp -d)"; chmod 700 "$tmpdir"
       trap 'rm -rf "$tmpdir"' EXIT
-      if ! PP_PASSPHRASE="$pass" pp_crypt open < "$file" > "$tmpdir/bundle.tgz"; then
+      if ! PL_PASSPHRASE="$pass" pp_crypt open < "$file" > "$tmpdir/bundle.tgz"; then
         die "couldn't decrypt (wrong passphrase, or the file is damaged)"
       fi
       file="$tmpdir/bundle.tgz"
@@ -400,7 +437,7 @@ secrets_key=$key"
       [ "$ans" = "y" ] || { echo "aborted"; exit 0; }
       docker run --rm -v "$VOLUME":/data -v "$dir":/backup alpine \
         sh -c 'rm -rf /data/* /data/..?* 2>/dev/null; tar xzf "/backup/'"$base"'" -C /data' >/dev/null
-      echo "✓ restored into $VOLUME. Start it:  ./pp-box up"
+      echo "✓ restored into $VOLUME. Start it:  ./pl-box up"
       echo "  note: this is an old-format backup — it does not carry the agents add-on."
       exit 0
     fi
@@ -432,18 +469,18 @@ secrets_key=$key"
     # The secrets key must match the restored secrets.json or the box comes up unable to
     # decrypt its own state. Never silently rewrite .env — say what's wrong and ask.
     if [ -n "$b_key" ] && [ -f "$HERE/.env" ]; then
-      cur="$(envval PP_SECRETS_KEY)"
+      cur="$(envval PL_SECRETS_KEY)"
       if [ "$cur" != "$b_key" ]; then
         echo
-        echo "This .env has a different PP_SECRETS_KEY than the backup. Left as-is, the box"
+        echo "This .env has a different PL_SECRETS_KEY than the backup. Left as-is, the box"
         echo "will not be able to decrypt the restored secrets.json."
-        read -rp "Set PP_SECRETS_KEY in .env to the backup's key? [y/N] " ka
+        read -rp "Set PL_SECRETS_KEY in .env to the backup's key? [y/N] " ka
         if [ "$ka" = "y" ]; then
           cp "$HERE/.env" "$HERE/.env.bak-$(date +%s)"
-          if grep -q '^PP_SECRETS_KEY=' "$HERE/.env"; then
-            sed -i.tmp "s|^PP_SECRETS_KEY=.*|PP_SECRETS_KEY=$b_key|" "$HERE/.env" && rm -f "$HERE/.env.tmp"
+          if grep -q '^PL_SECRETS_KEY=' "$HERE/.env"; then
+            sed -i.tmp "s|^PL_SECRETS_KEY=.*|PL_SECRETS_KEY=$b_key|" "$HERE/.env" && rm -f "$HERE/.env.tmp"
           else
-            printf 'PP_SECRETS_KEY=%s\n' "$b_key" >> "$HERE/.env"
+            printf 'PL_SECRETS_KEY=%s\n' "$b_key" >> "$HERE/.env"
           fi
           echo "  ✓ .env updated (previous copy kept alongside it)"
         else
@@ -451,30 +488,30 @@ secrets_key=$key"
         fi
       fi
     fi
-    echo "✓ restored. Start it:  ./pp-box up"
+    echo "✓ restored. Start it:  ./pl-box up"
     ;;
 
   agents)
-    have_env
+    have_env; need_migrated_keys
     case "${1:-status}" in
       on)
         if agents_on; then echo "● agents: already installed"; exit 0; fi
         # Pull, don't lecture. This used to check for a LOCAL tag and tell the owner to run
         # a docker build — so the published agent image was never used by any normal path.
-        ai="${PP_AGENT_IMAGE:-jaimemelon/pureprivacy-agent:latest}"
+        ai="${PL_AGENT_IMAGE:-jaimemelon/privacy-lodge-agent:latest}"
         if ! docker image inspect "$ai" >/dev/null 2>&1; then
           echo "→ getting the agent image ($ai)"
           if ! docker pull "$ai"; then
             echo "Couldn't pull the agent image. Build it from source instead:"
-            echo "    (cd agent && docker build -t pureprivacy-agent:dev .)"
-            echo "    then add PP_AGENT_IMAGE=pureprivacy-agent:dev to .env"
+            echo "    (cd agent && docker build -t privacy-lodge-agent:dev .)"
+            echo "    then add PL_AGENT_IMAGE=privacy-lodge-agent:dev to .env"
             exit 1
           fi
         fi
-        if grep -q '^PP_AGENTS=' "$HERE/.env"; then
-          sed -i 's/^PP_AGENTS=.*/PP_AGENTS=1/' "$HERE/.env"
+        if grep -q '^PL_AGENTS=' "$HERE/.env"; then
+          sed -i 's/^PL_AGENTS=.*/PL_AGENTS=1/' "$HERE/.env"
         else
-          printf 'PP_AGENTS=1\n' >> "$HERE/.env"
+          printf 'PL_AGENTS=1\n' >> "$HERE/.env"
         fi
         DC up -d
         echo "✓ agents installed. Finish setup from the Agents app on your phone."
@@ -483,17 +520,17 @@ secrets_key=$key"
         # Stop + remove ONLY the agent service. The agent's data volume is left alone, so
         # turning agents back on keeps its profiles, memories and skills.
         docker compose --profile agents rm -sf agent >/dev/null 2>&1 || true
-        if grep -q '^PP_AGENTS=' "$HERE/.env"; then
-          sed -i 's/^PP_AGENTS=.*/PP_AGENTS=0/' "$HERE/.env"
+        if grep -q '^PL_AGENTS=' "$HERE/.env"; then
+          sed -i 's/^PL_AGENTS=.*/PL_AGENTS=0/' "$HERE/.env"
         fi
-        echo "✓ agents removed. Their data volume is kept — './pp-box agents on' restores it."
+        echo "✓ agents removed. Their data volume is kept — './pl-box agents on' restores it."
         ;;
       status|"")
         if agents_on; then
-          st="$(docker ps --filter name=pureprivacy-agent --format '{{.Status}}')"
-          echo "● agents: installed   ${st:-(not running — try ./pp-box up)}"
+          st="$(docker ps --filter name=privacy-lodge-agent --format '{{.Status}}')"
+          echo "● agents: installed   ${st:-(not running — try ./pl-box up)}"
         else
-          echo "● agents: not installed   (install: ./pp-box agents on)"
+          echo "● agents: not installed   (install: ./pl-box agents on)"
         fi
         ;;
       ui)
@@ -508,11 +545,11 @@ secrets_key=$key"
         # for everyone with an account on this host. This listens on 127.0.0.1 only, pipes
         # through `docker exec` (no new container port, nothing on the LAN, nothing on the
         # docker bridge), and is gone the moment you press Ctrl-C.
-        agents_on || die "agents aren't installed — run './pp-box agents on' first"
-        docker ps --filter name=pureprivacy-agent --filter status=running -q | grep -q . \
-          || die "the agent container isn't running — try './pp-box up'"
+        agents_on || die "agents aren't installed — run './pl-box agents on' first"
+        docker ps --filter name=privacy-lodge-agent --filter status=running -q | grep -q . \
+          || die "the agent container isn't running — try './pl-box up'"
         port="${2:-8787}"
-        pw="$(docker exec pureprivacy-agent cat /handoff/webui-password 2>/dev/null || true)"
+        pw="$(docker exec privacy-lodge-agent cat /handoff/webui-password 2>/dev/null || true)"
         echo "Agent settings → http://127.0.0.1:${port}/"
         [ -n "$pw" ] && echo "Password:        $pw" \
                      || echo "Password:        (none published yet — set one from the Agents app)"
@@ -547,7 +584,7 @@ RELAY = (
 
 def serve(conn):
     p = subprocess.Popen(
-        ["docker", "exec", "-i", "pureprivacy-agent", "python3", "-c", RELAY],
+        ["docker", "exec", "-i", "privacy-lodge-agent", "python3", "-c", RELAY],
         stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 
     def to_container():
@@ -587,11 +624,11 @@ except KeyboardInterrupt:
     print("\n✓ tunnel closed")
 PY
         ;;
-      *) die "usage: ./pp-box agents [on|off|status|ui [port]]" ;;
+      *) die "usage: ./pl-box agents [on|off|status|ui [port]]" ;;
     esac
     ;;
 
-  shell)  docker exec -it pureprivacy-box bash 2>/dev/null || docker exec -it pureprivacy-box sh ;;
+  shell)  docker exec -it privacy-lodge-box bash 2>/dev/null || docker exec -it privacy-lodge-box sh ;;
 
   destroy)
     echo "This removes the box AND its $VOLUME volume — the onion key + account are GONE."
@@ -601,9 +638,9 @@ PY
     if docker volume inspect "$AGENT_VOLUME" >/dev/null 2>&1; then
       echo "It ALSO removes $AGENT_VOLUME — every agent, its model API keys and all transcripts."
     fi
-    echo "Take a backup first if you might want any of it:  ./pp-box backup"
-    read -rp "Type the box name to confirm ('$(envval PP_BOX)'): " ans
-    [ "$ans" = "$(envval PP_BOX)" ] && [ -n "$ans" ] || { echo "aborted"; exit 0; }
+    echo "Take a backup first if you might want any of it:  ./pl-box backup"
+    read -rp "Type the box name to confirm ('$(envval PL_BOX)'): " ans
+    [ "$ans" = "$(envval PL_BOX)" ] && [ -n "$ans" ] || { echo "aborted"; exit 0; }
     DC down -v 2>/dev/null || true
     for v in "$VOLUME" "$AGENT_VOLUME" "$HANDOFF_VOLUME"; do
       docker volume rm "$v" 2>/dev/null || true
@@ -615,5 +652,5 @@ PY
     # print the header comment block (from line 2 to the first non-comment line)
     awk 'NR>=2 && /^#/ {sub(/^# ?/,""); print; next} NR>=2 {exit}' "$0"
     ;;
-  *) die "unknown command '$cmd' — run: ./pp-box help" ;;
+  *) die "unknown command '$cmd' — run: ./pl-box help" ;;
 esac

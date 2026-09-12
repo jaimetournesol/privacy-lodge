@@ -1,4 +1,4 @@
-# PurePrivacy agent — Hermes Agent + Hermes WebUI, built from source, pinned together.
+# Privacy Lodge agent — Hermes Agent + Hermes WebUI, built from source, pinned together.
 #
 # WHY WE BUILD THIS OURSELVES rather than pulling the upstream images:
 #
@@ -12,7 +12,7 @@
 #      with that capability into a privacy appliance is not something to do implicitly — we
 #      pin the exact commits we reviewed.
 #
-# The container shares the BOX's network namespace (`--network container:pureprivacy-box`),
+# The container shares the BOX's network namespace (`--network container:privacy-lodge-box`),
 # so it reaches tuwunel on 127.0.0.1:8118 and tor's SOCKS on 127.0.0.1:9150 with no new
 # port exposure, and the WebUI's 127.0.0.1:8787 lands on the box's loopback where tor can
 # map a (client-authorised) onion port onto it. Nothing here publishes a port itself.
@@ -121,9 +121,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #
 # Costs roughly +700 MB. That is a deliberate trade against the size argument at the top of
 # this file: a box that only relays chat does not need it, a box you actually work from
-# does. Build with `--build-arg PP_DEV_TOOLS=0` for the lean image.
-ARG PP_DEV_TOOLS=1
-RUN if [ "$PP_DEV_TOOLS" = "1" ]; then \
+# does. Build with `--build-arg PL_DEV_TOOLS=0` for the lean image.
+ARG PL_DEV_TOOLS=1
+RUN if [ "$PL_DEV_TOOLS" = "1" ]; then \
       apt-get update && apt-get install -y --no-install-recommends \
         `# compilers and build systems` \
         build-essential pkg-config cmake autoconf automake libtool m4 bison flex patch \
@@ -148,7 +148,7 @@ RUN if [ "$PP_DEV_TOOLS" = "1" ]; then \
       && ln -sf "$(command -v fdfind)" /usr/local/bin/fd \
       && ln -sf "$(command -v batcat)" /usr/local/bin/bat \
       && echo "dev toolchain installed"; \
-    else echo "dev toolchain skipped (PP_DEV_TOOLS=$PP_DEV_TOOLS)"; fi
+    else echo "dev toolchain skipped (PL_DEV_TOOLS=$PL_DEV_TOOLS)"; fi
 
 # ── Don't let the agent pip-install into its own runtime ─────────────────────────────────
 # `python`, `pip` and friends resolve to /opt/hermes/venv (PATH puts it first) — that is
@@ -214,24 +214,24 @@ RUN printf '%s\n' \
 
 COPY --from=build /opt/hermes /opt/hermes
 COPY entrypoint.sh /opt/hermes/entrypoint.sh
-# pp-config-set edits a profile's config.yaml WITHOUT reformatting it. `hermes config set`
+# pl-config-set edits a profile's config.yaml WITHOUT reformatting it. `hermes config set`
 # reformats and drops every comment (measured: a 61-line profile config came back as 25), and
 # the entrypoint touches that file on every boot — so a lossy writer erodes the owner's
 # settings one restart at a time. See the script's docstring.
-COPY bin/pp-config-set /usr/local/bin/pp-config-set
-# pp-auth-daemon runs a device-code sign-in (Codex et al) for an owner who is holding a PHONE,
+COPY bin/pl-config-set /usr/local/bin/pl-config-set
+# pl-auth-daemon runs a device-code sign-in (Codex et al) for an owner who is holding a PHONE,
 # not a shell: it drives the blocking `hermes auth add` on a pty and publishes the user code
 # to the box over /handoff. See the script's docstring for why a pty is mandatory.
-COPY bin/pp-auth-daemon /usr/local/bin/pp-auth-daemon
-RUN chmod +x /opt/hermes/entrypoint.sh /usr/local/bin/pp-config-set /usr/local/bin/pp-auth-daemon \
-    && pp-config-set 2>&1 | grep -q "pp-config-set" \
-    && python3 -c "import ast,sys; ast.parse(open('/usr/local/bin/pp-auth-daemon').read())" \
-    && echo "pp-config-set + pp-auth-daemon installed"
+COPY bin/pl-auth-daemon /usr/local/bin/pl-auth-daemon
+RUN chmod +x /opt/hermes/entrypoint.sh /usr/local/bin/pl-config-set /usr/local/bin/pl-auth-daemon \
+    && pl-config-set 2>&1 | grep -q "pl-config-set" \
+    && python3 -c "import ast,sys; ast.parse(open('/usr/local/bin/pl-auth-daemon').read())" \
+    && echo "pl-config-set + pl-auth-daemon installed"
 
 # Everything stateful lives under /data so ONE volume carries it: config, the agent's
 # profiles (= the agents themselves), sessions, memories, skills, and ~/.hermes/.env which
 # holds the model API keys. Treat this volume as secret material — it is not covered by
-# `pp-box backup` today, which tars only the box's own /data.
+# `pl-box backup` today, which tars only the box's own /data.
 ENV HERMES_HOME=/data/hermes \
     HERMES_WEBUI_AGENT_DIR=/opt/hermes/agent \
     HERMES_WEBUI_PYTHON=/opt/hermes/venv/bin/python \

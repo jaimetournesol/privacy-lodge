@@ -2,7 +2,7 @@
 # silently excluded a script the agent Dockerfile COPYs — a fresh clone would fail the
 # build. These entries are all build artefacts staged at docker/ root by build.sh.
 /bin/
-/pureprivacy
+/privacy-lodge
 /.env
 /backups/
 /connect-qr.png

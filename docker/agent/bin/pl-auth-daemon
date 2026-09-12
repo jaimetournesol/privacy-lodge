@@ -1,7 +1,7 @@
 #!/opt/hermes/venv/bin/python
 """Run a Hermes device-code sign-in on behalf of the owner's PHONE.
 
-    pp-auth-daemon            # watch /handoff/auth-request.json forever
+    pl-auth-daemon            # watch /handoff/auth-request.json forever
 
 Why this exists: `hermes auth add openai-codex --type oauth` is a DEVICE-CODE flow. It prints
 a URL and a short code, then BLOCKS polling OpenAI until the owner signs in in a browser. The

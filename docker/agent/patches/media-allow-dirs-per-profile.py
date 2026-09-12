@@ -44,7 +44,7 @@ ANCHOR = '''    roots.extend(_kanban_attachment_roots())
 '''
 
 INSERT = '''    roots.extend(_kanban_attachment_roots())
-    # PurePrivacy: the ACTIVE profile's working root, so each agent may deliver from its own
+    # Privacy Lodge: the ACTIVE profile's working root, so each agent may deliver from its own
     # directory and no other. See docker/agent/patches/media-allow-dirs-per-profile.py.
     _pp_root = _pp_profile_working_root()
     if _pp_root is not None:

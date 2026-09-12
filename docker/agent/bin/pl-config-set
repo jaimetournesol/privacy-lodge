@@ -1,8 +1,8 @@
 #!/opt/hermes/venv/bin/python
 """Set dotted keys in a Hermes config.yaml WITHOUT destroying the rest of the file.
 
-    pp-config-set <config.yaml> <dotted.key> <value> [<dotted.key> <value> ...]
-    pp-config-set --replace <config.yaml> <block> k=v [k=v ...]
+    pl-config-set <config.yaml> <dotted.key> <value> [<dotted.key> <value> ...]
+    pl-config-set --replace <config.yaml> <block> k=v [k=v ...]
 
 Why this exists rather than `hermes config set`: Hermes's own writer reformats the file and
 drops every comment. A profile's config.yaml is where Hermes ships its inline documentation
@@ -41,7 +41,7 @@ try:
 except ImportError:  # pragma: no cover - defensive
     import yaml
 
-    print("pp-config-set: ruamel missing — comments will be lost", file=sys.stderr)
+    print("pl-config-set: ruamel missing — comments will be lost", file=sys.stderr)
     _load = yaml.safe_load
 
     def _dump(data, fh):
@@ -99,7 +99,7 @@ def main(argv):
         replacement = {}
         for pair in pairs:
             if "=" not in pair:
-                print(f"pp-config-set: expected key=value, got {pair!r}", file=sys.stderr)
+                print(f"pl-config-set: expected key=value, got {pair!r}", file=sys.stderr)
                 return 2
             key, _, raw = pair.partition("=")
             if raw != "":

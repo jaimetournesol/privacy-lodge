@@ -52,7 +52,7 @@ ANCHOR = '''def _scoped_recovery_key() -> str:'''
 HELPER = '''def _scoped_recovery_key_output_file() -> str:
     """Resolve MATRIX_RECOVERY_KEY_OUTPUT_FILE honoring the active profile's secret scope.
 
-    PurePrivacy patch — see docker/agent/patches/matrix-per-profile-recovery-output.py.
+    Privacy Lodge patch — see docker/agent/patches/matrix-per-profile-recovery-output.py.
     Exactly the fix upstream applied to MATRIX_RECOVERY_KEY in _scoped_recovery_key()
     below (#69090); this variable was missed. Without it, a multiplexed profile whose
     output path lives in its own .env is told "not configured" and never bootstraps

@@ -1,25 +1,25 @@
-# Run a PurePrivacy box in one command:  docker compose up -d  &&  docker compose logs -f
+# Run a Privacy Lodge box in one command:  docker compose up -d  &&  docker compose logs -f
 # The box is reached only via its .onion (outbound Tor). The ONE published port is the
 # first-run web setup page, bound to the HOST's 127.0.0.1 only (never the LAN) and dead
 # once your phone has signed in. A named volume holds the box's identity (onion key, admin,
 # secrets, pairings).
 services:
   box:
-    image: ${PP_IMAGE:-pureprivacy-box:dev}   # ./build.sh builds :dev; or PP_IMAGE=jaimemelon/pureprivacy-box:latest to pull from Docker Hub
-    container_name: pureprivacy-box
+    image: ${PL_IMAGE:-privacy-lodge-box:dev}   # ./build.sh builds :dev; or PL_IMAGE=jaimemelon/privacy-lodge-box:latest to pull from Docker Hub
+    container_name: privacy-lodge-box
     restart: unless-stopped
     environment:
-      # Only needed for the scripted path (with PP_PASS). In the default web-setup flow you
+      # Only needed for the scripted path (with PL_PASS). In the default web-setup flow you
       # choose the username in the browser, so leave this unset.
-      PP_USER: "${PP_USER:-}"
-      # Leave PP_PASS unset (default) for the interactive web-setup flow: open the setup
-      # page (below) in your browser, choose a username + password, scan the QR. Set PP_PASS
+      PL_USER: "${PL_USER:-}"
+      # Leave PL_PASS unset (default) for the interactive web-setup flow: open the setup
+      # page (below) in your browser, choose a username + password, scan the QR. Set PL_PASS
       # to provision non-interactively instead (CI / scripted).
-      PP_PASS: "${PP_PASS:-}"
-      PP_BOX:  "${PP_BOX:-mybox}"
+      PL_PASS: "${PL_PASS:-}"
+      PL_BOX:  "${PL_BOX:-mybox}"
       # Stable key so secrets.json decrypts across restarts. Optional — a non-secret default
-      # is used if unset. For a real box, generate + keep one:  PP_SECRETS_KEY=$(openssl rand -base64 32)
-      PP_SECRETS_KEY: "${PP_SECRETS_KEY:-}"
+      # is used if unset. For a real box, generate + keep one:  PL_SECRETS_KEY=$(openssl rand -base64 32)
+      PL_SECRETS_KEY: "${PL_SECRETS_KEY:-}"
     ports:
       # One-page web setup — HOST loopback only. On first run open http://127.0.0.1:8470/
       # in your browser. Closes itself once your phone signs in.
@@ -35,15 +35,15 @@ services:
   # ── Agents (optional add-on) ────────────────────────────────────────────────────────
   # A SEPARATE image, behind a compose profile, so a plain box stays a plain box: without
   # `--profile agents` this service is never created and nothing here is pulled. Choose it
-  # at install time (`pp-box init`) or turn it on later (`pp-box agents on`).
+  # at install time (`pl-box init`) or turn it on later (`pl-box agents on`).
   #
   # Why it can only be enabled from the HOST: the box is itself a container, so starting a
   # sibling would need /var/run/docker.sock — i.e. root on the host. Installing software is
   # deliberately a host action; the phone's one-tap setup then provisions the agent that
   # this service runs.
   agent:
-    image: ${PP_AGENT_IMAGE:-jaimemelon/pureprivacy-agent:latest}
-    container_name: pureprivacy-agent
+    image: ${PL_AGENT_IMAGE:-jaimemelon/privacy-lodge-agent:latest}
+    container_name: privacy-lodge-agent
     profiles: ["agents"]
     restart: unless-stopped
     # Share the BOX's network namespace: the agent reaches tuwunel on 127.0.0.1:8118 and
@@ -51,7 +51,7 @@ services:
     # 127.0.0.1:8787 lands on the box's loopback where tor can map a client-authorised
     # onion port onto it. It also stops the agent taking a Tor circuit to reach the box
     # sitting next to it. Consequence: this service has no ports/networks of its own, and
-    # it dies when the box container is recreated — hence `pp-box update` recreates both.
+    # it dies when the box container is recreated — hence `pl-box update` recreates both.
     network_mode: "service:box"
     depends_on:
       - box
@@ -63,15 +63,15 @@ services:
 
 volumes:
   pp-data:
-    # Per-install volume name. `pp-box init` generates a unique one into .env (PP_VOLUME) so
+    # Per-install volume name. `pl-box init` generates a unique one into .env (PL_VOLUME) so
     # two boxes on one host can't collide. It must stay STABLE for the life of the box — this
     # volume holds the onion key; pointing at a different name = a new, empty box.
-    # Existing installs (no PP_VOLUME in .env) keep the original name, so nothing is orphaned.
-    name: ${PP_VOLUME:-pureprivacy-data}
+    # Existing installs (no PL_VOLUME in .env) keep the original name, so nothing is orphaned.
+    name: ${PL_VOLUME:-privacy-lodge-data}
   pp-agent-data:
     # The agent's own state: profiles (= the agents themselves), sessions, memories, skills,
-    # and ~/.hermes/.env with the model API keys. SECRET MATERIAL — `pp-box backup` bundles
+    # and ~/.hermes/.env with the model API keys. SECRET MATERIAL — `pl-box backup` bundles
     # this volume alongside the box's own, so a restore brings the agents back with it.
-    name: ${PP_AGENT_VOLUME:-pureprivacy-agent-data}
+    name: ${PL_AGENT_VOLUME:-privacy-lodge-agent-data}
   pp-agent-handoff:
-    name: ${PP_AGENT_HANDOFF_VOLUME:-pureprivacy-agent-handoff}
+    name: ${PL_AGENT_HANDOFF_VOLUME:-privacy-lodge-agent-handoff}

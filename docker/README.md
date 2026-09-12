@@ -1,4 +1,4 @@
-# PurePrivacy box in Docker
+# Privacy Lodge box in Docker
 
 Run your box as a container — on a Linux server, a NAS, a Raspberry Pi, a cloud VPS, or
 Windows/macOS via Docker Desktop. One image, everywhere Docker runs.
@@ -8,89 +8,89 @@ rendezvous), so there's nothing to expose or forward. Its whole identity — the
 the admin account, `secrets.json`, and `pairings.json` — lives in **one named volume**.
 Lose that volume and the box is gone for good, so **back it up**.
 
-> **Your volume name is unique to your install.** `pp-box init` generates one (e.g.
-> `pureprivacy-data-a1b2c3d4`) and records it in `.env` as `PP_VOLUME`, so two boxes on the
+> **Your volume name is unique to your install.** `pl-box init` generates one (e.g.
+> `privacy-lodge-data-a1b2c3d4`) and records it in `.env` as `PL_VOLUME`, so two boxes on the
 > same host never collide. **It must never change** — pointing the box at a different name
 > gives you a new, empty box. Keep `.env` safe alongside your backups.
 
 ### Upgrading, and old leftover volumes
 
-- **Already running a box?** Just update — your `.env` has no `PP_VOLUME`, so the box keeps
-  using the original `pureprivacy-data` volume: same onion, same account, nothing to do.
-- **Fresh install on a host that still has an old volume?** `pp-box init` generates a new
-  volume name, so the leftover `pureprivacy-data` is **ignored and left untouched** — you get a
-  clean box, not a resurrected old one. Delete it yourself (`docker volume rm pureprivacy-data`)
+- **Already running a box?** Just update — your `.env` has no `PL_VOLUME`, so the box keeps
+  using the original `privacy-lodge-data` volume: same onion, same account, nothing to do.
+- **Fresh install on a host that still has an old volume?** `pl-box init` generates a new
+  volume name, so the leftover `privacy-lodge-data` is **ignored and left untouched** — you get a
+  clean box, not a resurrected old one. Delete it yourself (`docker volume rm privacy-lodge-data`)
   once you're sure you don't need it.
-- ⚠️ **Don't `init --force` on a machine whose live box uses `pureprivacy-data`** — that writes a
+- ⚠️ **Don't `init --force` on a machine whose live box uses `privacy-lodge-data`** — that writes a
   *new* volume name and your real box will look like it vanished (it hasn't; the volume is still
   there, just unused). `init` warns you if it spots one. To go back, set
-  `PP_VOLUME=pureprivacy-data` in `.env`.
+  `PL_VOLUME=privacy-lodge-data` in `.env`.
 
 ## Easiest: pull the published image
 
 No build needed — pull it straight from Docker Hub and finish setup in your browser:
 
 ```bash
-docker pull jaimemelon/pureprivacy-box:latest
+docker pull jaimemelon/privacy-lodge-box:latest
 MYVOL=pp-data-$(openssl rand -hex 4)      # your box's data volume — note it down, keep it forever
-docker run -d --name pureprivacy-box --restart unless-stopped -v "$MYVOL":/data \
-  -p 127.0.0.1:8470:8470 -e PUREPRIVACY_SETUP_BIND=0.0.0.0 \
-  jaimemelon/pureprivacy-box:latest
+docker run -d --name privacy-lodge-box --restart unless-stopped -v "$MYVOL":/data \
+  -p 127.0.0.1:8470:8470 -e PRIVACY_LODGE_SETUP_BIND=0.0.0.0 \
+  jaimemelon/privacy-lodge-box:latest
 # then open http://127.0.0.1:8470/ in your browser
 ```
 
-(Or with compose: set `PP_IMAGE=jaimemelon/pureprivacy-box:latest` and `docker compose up -d`.)
-The rest of this guide covers building the image yourself and the `pp-box` helper.
+(Or with compose: set `PL_IMAGE=jaimemelon/privacy-lodge-box:latest` and `docker compose up -d`.)
+The rest of this guide covers building the image yourself and the `pl-box` helper.
 
 ## Quick start (build it yourself)
 
-Everything goes through the **`pp-box`** helper in this directory. Set-up is a **one-page
+Everything goes through the **`pl-box`** helper in this directory. Set-up is a **one-page
 web form** — no need to bake a password into config:
 
 ```bash
-./pp-box build     # once — build the container image from the host-built binary + sidecars
-./pp-box init      # box name + a fresh secrets key → .env (leave the password blank)
-./pp-box up        # start the box; it prints your setup URL
+./pl-box build     # once — build the container image from the host-built binary + sidecars
+./pl-box init      # box name + a fresh secrets key → .env (leave the password blank)
+./pl-box up        # start the box; it prints your setup URL
 ```
 
 Then open the URL it prints — **http://127.0.0.1:8470/** — in any browser on this machine:
 
 1. Choose a **username + password** (this is what your phone signs in with — keep it safe).
 2. The box provisions and shows a **QR code**.
-3. **Scan it in the PurePrivacy phone app** → you're signed in, all over Tor.
+3. **Scan it in the Privacy Bolt app** → you're signed in, all over Tor.
 
 The setup page is loopback-only (host `127.0.0.1` only, never the LAN) and **shuts itself
 down the moment your phone connects** — setup is one-time.
 
 > Prefer a scripted/non-interactive setup (CI, headless)? Give `init` a password instead and
-> the box provisions straight from it; then `./pp-box qr` prints the connect code to the
+> the box provisions straight from it; then `./pl-box qr` prints the connect code to the
 > terminal (the pre-web-setup behaviour, still supported).
 
 ## All commands
 
 | Command | What it does |
 |---|---|
-| `./pp-box init` | Create `.env` — box name, a fresh `PP_SECRETS_KEY`, and an optional password (blank ⇒ set it in the browser). |
-| `./pp-box build` | Build the `pureprivacy-box:dev` image (stages the binary + sidecars). |
-| `./pp-box up` | Start the box. First run prints the **web-setup URL** (`http://127.0.0.1:8470/`); a provisioned box just resumes. |
-| `./pp-box qr` | Print the phone-connect QR in the terminal (for the scripted/password-in-`.env` path). |
-| `./pp-box status` | Running? Shows the onion, uptime, and the volume name. |
-| `./pp-box logs` | Follow the logs (watch it mint the onion + boot the sidecars). |
-| `./pp-box restart` | Restart the box. |
-| `./pp-box down` | Stop the box — identity is kept in the volume. |
-| `./pp-box update [<version>]` | Update, keeping identity. Docker-Hub install: pull `<version>` (or refresh the current tag), pin it in `.env`, recreate — the box's own update check hands you this command with the version filled in. Source install: rebuild the image + recreate. |
-| `./pp-box backup [dir] [--encrypt]` | Bundle the box **and** the agents add-on (onion key, secrets, pairings, agent profiles + keys) → `backups/`. **Do this.** `--encrypt` seals it with a passphrase (AES-256-GCM) — without the passphrase the file is noise, to you too. |
-| `./pp-box restore <file>` | Restore a backup into the volume (stop the box first). Old bare-tar backups and `.enc` bundles both work. |
-| `./pp-box shell` | Open a shell inside the container. |
-| `./pp-box destroy` | Remove the box **and** its volume (asks you to type the box name). |
+| `./pl-box init` | Create `.env` — box name, a fresh `PL_SECRETS_KEY`, and an optional password (blank ⇒ set it in the browser). |
+| `./pl-box build` | Build the `privacy-lodge-box:dev` image (stages the binary + sidecars). |
+| `./pl-box up` | Start the box. First run prints the **web-setup URL** (`http://127.0.0.1:8470/`); a provisioned box just resumes. |
+| `./pl-box qr` | Print the phone-connect QR in the terminal (for the scripted/password-in-`.env` path). |
+| `./pl-box status` | Running? Shows the onion, uptime, and the volume name. |
+| `./pl-box logs` | Follow the logs (watch it mint the onion + boot the sidecars). |
+| `./pl-box restart` | Restart the box. |
+| `./pl-box down` | Stop the box — identity is kept in the volume. |
+| `./pl-box update [<version>]` | Update, keeping identity. Docker-Hub install: pull `<version>` (or refresh the current tag), pin it in `.env`, recreate — the box's own update check hands you this command with the version filled in. Source install: rebuild the image + recreate. |
+| `./pl-box backup [dir] [--encrypt]` | Bundle the box **and** the agents add-on (onion key, secrets, pairings, agent profiles + keys) → `backups/`. **Do this.** `--encrypt` seals it with a passphrase (AES-256-GCM) — without the passphrase the file is noise, to you too. |
+| `./pl-box restore <file>` | Restore a backup into the volume (stop the box first). Old bare-tar backups and `.enc` bundles both work. |
+| `./pl-box shell` | Open a shell inside the container. |
+| `./pl-box destroy` | Remove the box **and** its volume (asks you to type the box name). |
 
 ## Windows
 
 Runs on **Docker Desktop for Windows** — pick either front end (same commands, same box):
 
-- **PowerShell (native):** use `pp-box.ps1`, e.g. `./pp-box.ps1 init`, `./pp-box.ps1 up`,
-  `./pp-box.ps1 qr`. Same subcommands as the table above.
-- **WSL2 / Git Bash:** use the bash `./pp-box` exactly as on Linux. WSL2 is Docker Desktop's
+- **PowerShell (native):** use `pl-box.ps1`, e.g. `./pl-box.ps1 init`, `./pl-box.ps1 up`,
+  `./pl-box.ps1 qr`. Same subcommands as the table above.
+- **WSL2 / Git Bash:** use the bash `./pl-box` exactly as on Linux. WSL2 is Docker Desktop's
   default backend (real Linux), so this is the most battle-tested path; Git Bash works too
   (the script disables MSYS path-mangling for container mounts).
 
@@ -99,9 +99,9 @@ on a Linux host, so it **can't build on native Windows**. Get the image once, th
 work natively from PowerShell:
 
 ```powershell
-# on a Linux box (or in WSL2):  cd docker && ./pp-box build && docker save pureprivacy-box:dev -o pp-box.tar
-docker load -i pp-box.tar      # ← on Windows
-.\pp-box.ps1 init ; .\pp-box.ps1 up      # then open http://127.0.0.1:8470/ in your browser
+# on a Linux box (or in WSL2):  cd docker && ./pl-box build && docker save privacy-lodge-box:dev -o pl-box.tar
+docker load -i pl-box.tar      # ← on Windows
+.\pl-box.ps1 init ; .\pl-box.ps1 up      # then open http://127.0.0.1:8470/ in your browser
 ```
 
 (Or build it directly inside WSL2 and run from there.) A self-contained image you can
@@ -110,13 +110,13 @@ docker load -i pp-box.tar      # ← on Windows
 ## Agents (optional add-on)
 
 AI agents that run on your box, reached over Tor like everything else. Off unless you ask
-for it — `./pp-box agents on`, or choose it when the installer offers.
+for it — `./pl-box agents on`, or choose it when the installer offers.
 
 ```
-./pp-box agents on        # install (pulls jaimemelon/pureprivacy-agent)
-./pp-box agents status
-./pp-box agents ui        # open the control panel in a browser on THIS machine
-./pp-box agents off       # remove the container; the data volume is kept
+./pl-box agents on        # install (pulls jaimemelon/privacy-lodge-agent)
+./pl-box agents status
+./pl-box agents ui        # open the control panel in a browser on THIS machine
+./pl-box agents off       # remove the container; the data volume is kept
 ```
 
 Each agent gets its own Matrix account on your box and its own end-to-end encrypted room,
@@ -135,7 +135,7 @@ There is a password on top of that, which you choose.
 **The agent has a real toolchain.** It can compile things, build from source and run node —
 gcc/g++/make/cmake, the usual `-dev` headers, node + npm, plus `jq`, `sqlite3`, `psql`,
 `rsync`, `ssh`, `shellcheck`, `pdftotext`, ImageMagick, `ps`/`free`, `fd`, `bat`. That is
-about 1.2 GB of the image; build with `--build-arg PP_DEV_TOOLS=0` for a lean box that only
+about 1.2 GB of the image; build with `--build-arg PL_DEV_TOOLS=0` for a lean box that only
 relays chat.
 
 One rule when working in there: **`python` and `pip` are the agent's own runtime**
@@ -145,7 +145,7 @@ workspace volume (so it survives container recreates) with its own `pip`.
 
 Two things worth knowing before you rely on it:
 
-- **`pp-box backup` covers the agents too** (since bundle format 2): the agents' data
+- **`pl-box backup` covers the agents too** (since bundle format 2): the agents' data
   volume — profiles, memories, skills, **model API keys** — and the credential handoff
   volume ride in the same bundle and come back with `restore`. Older single-volume backups
   never held them; take a fresh backup once agents are set up.
@@ -155,30 +155,30 @@ Two things worth knowing before you rely on it:
 ## Back up your box — it's the whole identity
 
 An `.onion` address is derived from a secret key that exists **only** in your box's data
-volume (the `PP_VOLUME` name in `.env`). If that volume is deleted — or you point the box at a
+volume (the `PL_VOLUME` name in `.env`). If that volume is deleted — or you point the box at a
 different name — the address can never come back and your phone is orphaned on a dead box. So
 keep a backup (of the volume **and** `.env`):
 
 ```bash
-./pp-box backup                     # → docker/backups/pp-box-<onion>-N.tgz
+./pl-box backup                     # → docker/backups/pl-box-<onion>-N.tgz
 ```
 
 Recovering onto a new machine (or after an accidental wipe) is the reverse — and it brings
 back the **same onion**, so your phone reconnects with no re-pairing:
 
 ```bash
-./pp-box restore backups/pp-box-….tgz
-./pp-box up
+./pl-box restore backups/pl-box-….tgz
+./pl-box up
 ```
 
-`PP_SECRETS_KEY` (in `.env`) must also stay the same across restarts — it decrypts
+`PL_SECRETS_KEY` (in `.env`) must also stay the same across restarts — it decrypts
 `secrets.json`. `init` generates it once; keep `.env` private (it's `chmod 600` and
 git-ignored) and store a copy alongside your backup.
 
 ## Verified
 
 - Boots, provisions, mints its onion + admin account inside the container.
-- Identity persists in the `pureprivacy-data` volume; a fresh container **resumes with the
+- Identity persists in the `privacy-lodge-data` volume; a fresh container **resumes with the
   same onion**, and survives `docker restart` / a host reboot.
 - **Reachable over Tor via its `.onion` with no published ports** (proven box-to-box).
 - **Full feature parity — voice + video calls included.** All six sidecars run (tor,
@@ -189,7 +189,7 @@ git-ignored) and store a copy alongside your backup.
 ## Without the CLI (plain docker / compose)
 
 The CLI just wraps these. `docker compose` reads the `.env` that `init` wrote (all vars are
-optional — leave `PP_PASS` unset for the web-setup flow):
+optional — leave `PL_PASS` unset for the web-setup flow):
 
 ```bash
 docker compose up -d           # start; the setup page is published to host 127.0.0.1:8470 only
@@ -198,27 +198,27 @@ docker compose down            # stop
 ```
 
 Then open **http://127.0.0.1:8470/** and finish setup in your browser (unless you set
-`PP_PASS`, in which case it provisions from that and prints the QR to the logs).
+`PL_PASS`, in which case it provisions from that and prints the QR to the logs).
 
-Or one plain `docker run` (identity in the `pureprivacy-data` volume; publish the setup port
+Or one plain `docker run` (identity in the `privacy-lodge-data` volume; publish the setup port
 to host loopback only):
 
 ```bash
 MYVOL=pp-data-$(openssl rand -hex 4)     # pick a name and KEEP it — it holds your box identity
 docker volume create "$MYVOL"
-docker run -d --name pureprivacy-box --restart unless-stopped -v "$MYVOL":/data \
+docker run -d --name privacy-lodge-box --restart unless-stopped -v "$MYVOL":/data \
   -p 127.0.0.1:8470:8470 \
-  -e PUREPRIVACY_SETUP_BIND=0.0.0.0 \
-  pureprivacy-box:dev
-docker logs -f pureprivacy-box     # then open http://127.0.0.1:8470/ in your browser
+  -e PRIVACY_LODGE_SETUP_BIND=0.0.0.0 \
+  privacy-lodge-box:dev
+docker logs -f privacy-lodge-box     # then open http://127.0.0.1:8470/ in your browser
 ```
 
 ⚠️ Write that volume name down. Every later `docker run`, backup, or restore must use the
 **same** one — a different name is a different (empty) box, and the onion key is unrecoverable.
 
 *(Prefer the non-interactive path? Drop the two setup lines and add
-`-e PP_USER=yourname -e PP_PASS='a-strong-password' -e PP_SECRETS_KEY="$(openssl rand -base64 32)"`.
-`PP_USER` has no default — it's required whenever `PP_PASS` is set.)*
+`-e PL_USER=yourname -e PL_PASS='a-strong-password' -e PL_SECRETS_KEY="$(openssl rand -base64 32)"`.
+`PL_USER` has no default — it's required whenever `PL_PASS` is set.)*
 
 ## Notes & known limits (Stage 1)
 
