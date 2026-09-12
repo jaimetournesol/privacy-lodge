@@ -1,7 +1,7 @@
 [package]
-name = "pureprivacy"
-version = "0.1.10"
-description = "PurePrivacy — your own private box"
+name = "privacy-lodge"
+version = "0.2.0"
+description = "Privacy Lodge — your own private box"
 authors = ["Tournesol"]
 edition = "2021"
 
@@ -11,7 +11,7 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "pureprivacy_lib"
+name = "privacy_lodge_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -46,7 +46,7 @@ hmac = "0.12"
 sha1 = "0.10"
 # At-rest encryption of secrets.json (review finding H2). AES-256-GCM the secrets
 # envelope with a 32-byte master key held OUTSIDE the data dir — the OS keychain
-# (keyring), or a PUREPRIVACY_SECRETS_KEY env override for headless/CI boxes — so a
+# (keyring), or a PRIVACY_LODGE_SECRETS_KEY env override for headless/CI boxes — so a
 # snapshotted/stolen data dir no longer yields the cleartext admin password, TURN
 # secret, registration token or LiveKit keys. crypto-rust keeps it pure-Rust (no
 # system OpenSSL/libdbus); the apple/windows-native features are inert on Linux.

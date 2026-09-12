@@ -41,7 +41,7 @@ export interface RecoveryKit {
 }
 
 export interface ConnectQr {
-  /** "pureprivacy://connect?hs=<onion>&user=<username>&token=<hex>" */
+  /** "privacybolt://connect?hs=<onion>&user=<username>&token=<hex>" */
   payload: string;
   /** A complete inline <svg> QR code. */
   svg: string;
@@ -124,7 +124,7 @@ export function detectLegacyInstall(): Promise<LegacyInstall> {
 export interface JoinInfo {
   onion: string;
   join_token: string;
-  /** QR encoding pureprivacy://join?hs=…&token=… */
+  /** QR encoding privacybolt://join?hs=…&token=… */
   svg: string;
 }
 

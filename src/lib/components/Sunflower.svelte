@@ -1,6 +1,6 @@
 <script lang="ts">
   /**
-   * The PurePrivacy brand mark — a proper eight-petal sunflower.
+   * The Privacy Lodge brand mark — a proper eight-petal sunflower.
    * Eight gold petal-circles ring a darker seed-head centre.
    *
    * - `size`  px (default 20) — sets both width and height.

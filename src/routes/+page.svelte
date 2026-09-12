@@ -35,7 +35,7 @@
 </script>
 
 <svelte:head>
-  <title>PurePrivacy</title>
+  <title>Privacy Lodge</title>
 </svelte:head>
 
 {#if view === "loading"}

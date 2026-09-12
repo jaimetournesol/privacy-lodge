@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    pureprivacy_lib::run()
+    privacy_lodge_lib::run()
 }

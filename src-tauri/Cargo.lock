@@ -2990,6 +2990,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "privacy-lodge"
+version = "0.2.0"
+dependencies = [
+ "aes-gcm",
+ "base64 0.22.1",
+ "chrono",
+ "dirs",
+ "ed25519-dalek",
+ "fips205",
+ "hmac",
+ "keyring",
+ "pbkdf2",
+ "qrcode",
+ "rand 0.8.6",
+ "rcgen",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha1",
+ "sha2",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "tiny_http",
+ "tokio",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3049,36 +3079,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "pureprivacy"
-version = "0.1.10"
-dependencies = [
- "aes-gcm",
- "base64 0.22.1",
- "chrono",
- "dirs",
- "ed25519-dalek",
- "fips205",
- "hmac",
- "keyring",
- "pbkdf2",
- "qrcode",
- "rand 0.8.6",
- "rcgen",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "sha1",
- "sha2",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "tiny_http",
- "tokio",
- "x25519-dalek",
- "zeroize",
 ]
 
 [[package]]

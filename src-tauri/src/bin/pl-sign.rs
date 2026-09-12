@@ -1,13 +1,13 @@
-//! `pp-sign` — post-quantum half of the release-signing flow (feature K).
+//! `pl-sign` — post-quantum half of the release-signing flow (feature K).
 //!
 //! Ed25519 signing stays with `openssl` in `scripts/sign-release.sh`; this tool adds the
 //! SLH-DSA (FIPS-205) signature that makes an update manifest hybrid-signed. A box requires
 //! BOTH, so forging one is not enough — an attacker needs to break ed25519 *and* a hash-based
 //! scheme, which is the whole point.
 //!
-//!   pp-sign keygen <secret.bin> <public.hex>   # once; secret goes to _special-project
-//!   pp-sign sign <secret.bin> <file>           # prints the base64 signature
-//!   pp-sign verify <public.hex> <file> <sig.b64>
+//!   pl-sign keygen <secret.bin> <public.hex>   # once; secret goes to _special-project
+//!   pl-sign sign <secret.bin> <file>           # prints the base64 signature
+//!   pl-sign verify <public.hex> <file> <sig.b64>
 //!
 //! The secret key NEVER belongs in this repo, in a box, or in a backup.
 
@@ -36,9 +36,9 @@ fn b64(bytes: &[u8]) -> String {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
-    let usage = "usage: pp-sign keygen <secret.bin> <public.hex>\n\
-                        pp-sign sign <secret.bin> <file>\n\
-                        pp-sign verify <public.hex> <file> <sig.b64>";
+    let usage = "usage: pl-sign keygen <secret.bin> <public.hex>\n\
+                        pl-sign sign <secret.bin> <file>\n\
+                        pl-sign verify <public.hex> <file> <sig.b64>";
     match args.get(1).map(String::as_str) {
         Some("keygen") => {
             let (sk_path, pk_path) = (args.get(2).ok_or(usage)?, args.get(3).ok_or(usage)?);

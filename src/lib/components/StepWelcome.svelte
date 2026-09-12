@@ -39,7 +39,7 @@
 
   {#if legacy}
     <div class="legacy card" role="status">
-      <strong>You already have a PurePrivacy box running here.</strong>
+      <strong>You already have a Privacy Lodge box running here.</strong>
       <p>
         We found your existing Docker setup ({legacy.length} service{legacy.length ===
         1
@@ -51,7 +51,7 @@
       <p class="dim">
         Happy with your current box? Keep using it and close this app — nothing
         here touches it. Want to move? Back it up first
-        (<code>pureprivacy backup</code>), then set up fresh below and re-invite
+        (<code>privacy-lodge backup</code>), then set up fresh below and re-invite
         your people.
       </p>
     </div>

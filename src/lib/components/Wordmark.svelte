@@ -9,7 +9,7 @@
 
 <span class="wordmark {size}">
   <Sunflower size={glyphPx} />
-  <span class="name">PurePrivacy</span>
+  <span class="name">Privacy Lodge</span>
 </span>
 
 <style>

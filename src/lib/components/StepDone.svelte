@@ -36,13 +36,13 @@
       </dl>
     {/if}
     <p class="dim note">
-      Your recovery kit is safe. To put your box in your pocket, open PurePrivacy
+      Your recovery kit is safe. To put your box in your pocket, open Privacy Lodge
       and tap &ldquo;show QR&rdquo; on your private address — any time you like.
     </p>
   </div>
 
   <div class="actions">
-    <button class="btn btn-primary" onclick={onOpen}>Open PurePrivacy</button>
+    <button class="btn btn-primary" onclick={onOpen}>Open Privacy Lodge</button>
   </div>
 </div>
 

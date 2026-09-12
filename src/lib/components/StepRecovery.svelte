@@ -110,7 +110,7 @@
     <div class="card kit print-area">
       <div class="kit-head">
         <Sunflower size={20} />
-        <strong>PurePrivacy recovery kit</strong>
+        <strong>Privacy Lodge recovery kit</strong>
       </div>
       <ol class="phrase mono">
         {#each words as w, i}

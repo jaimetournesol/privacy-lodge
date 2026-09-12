@@ -128,7 +128,7 @@
     {/if}
   </section>
 
-  <footer class="dim foot">PurePrivacy · {st.box_name || "your box"}</footer>
+  <footer class="dim foot">Privacy Lodge · {st.box_name || "your box"}</footer>
 </div>
 
 <style>

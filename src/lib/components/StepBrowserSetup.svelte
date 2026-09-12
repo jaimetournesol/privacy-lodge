@@ -37,13 +37,13 @@
     <h1>Setting up your box…</h1>
     <p class="lead">
       Your box is coming up now. Go back to the <strong>setup tab in your browser</strong> —
-      when it’s ready it’ll show a QR code to scan with the PurePrivacy app on your phone.
+      when it’s ready it’ll show a QR code to scan with the Privacy Lodge app on your phone.
     </p>
   {:else}
     <h1>Finish setup in your browser</h1>
     <p class="lead">
       We opened a private setup page in your browser. Choose a username and password there,
-      then scan the QR code with the PurePrivacy app on your phone. Once your phone is
+      then scan the QR code with the Privacy Lodge app on your phone. Once your phone is
       connected, everything else is managed from the app.
     </p>
   {/if}

@@ -73,7 +73,7 @@
         <ol class="steps">
           <li>
             On their phone or computer, install <strong>Element</strong> (or
-            PurePrivacy, once it’s out) — and <strong>Orbot</strong> for Tor.
+            Privacy Lodge, once it’s out) — and <strong>Orbot</strong> for Tor.
           </li>
           <li>
             Point it at your box’s address and create an account using the join
