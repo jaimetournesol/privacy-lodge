@@ -17,7 +17,8 @@
 set -euo pipefail
 
 BIN_DIR="${PRIVACY_LODGE_BIN_DIR:-$HOME/.local/share/ai.tournesol.privacylodge/bin}"
-TUWUNEL_IMAGE="ghcr.io/matrix-construct/tuwunel:latest"
+TUWUNEL_VERSION="1.9.1"
+TUWUNEL_IMAGE="ghcr.io/matrix-construct/tuwunel@sha256:634609b554f05d90960ce096dda13e39cf45b692518e8cf734e255e1b9bddbe5"
 LIVEKIT_IMAGE="livekit/livekit-server:v1.13.1"
 LKJWT_IMAGE="ghcr.io/element-hq/lk-jwt-service:0.2.0"
 
@@ -104,37 +105,35 @@ FAILURES=0
 # --------------------------------------------------------------- tuwunel ----
 fetch_tuwunel() {
   local dest="$BIN_DIR/tuwunel"
-
-  if [[ "$FORCE" == 0 && -x "$dest" ]] && verify "$dest"; then
-    ok "tuwunel already present ($("$dest" --version 2>/dev/null | head -n1)) — skipping"
+  if [[ "$FORCE" == 0 && -x "$dest" ]] && [[ "$("$dest" --version 2>/dev/null)" == "tuwunel $TUWUNEL_VERSION" ]]; then
+    ok "tuwunel $TUWUNEL_VERSION already present — skipping"
     return 0
   fi
-
   if ! command -v docker >/dev/null 2>&1; then
     err "docker is required to extract tuwunel from $TUWUNEL_IMAGE"
     return 1
   fi
-
-  info "Pulling $TUWUNEL_IMAGE"
+  info "Pulling pinned tuwunel $TUWUNEL_VERSION"
   docker pull --quiet "$TUWUNEL_IMAGE" >/dev/null || { err "docker pull failed"; return 1; }
-
-  info "Extracting /usr/bin/tuwunel from image"
-  local cid
+  local cid staged
   cid="$(docker create "$TUWUNEL_IMAGE")" || { err "docker create failed"; return 1; }
-  if ! docker cp "$cid:/usr/bin/tuwunel" "$dest"; then
-    docker rm -f "$cid" >/dev/null 2>&1 || true
-    err "failed to copy tuwunel out of the image"
+  staged="$(mktemp "$BIN_DIR/.tuwunel.XXXXXX")" || { docker rm "$cid" >/dev/null; return 1; }
+  if ! docker cp "$cid:/usr/bin/tuwunel" "$staged"; then
+    docker rm "$cid" >/dev/null; rm -f "$staged"
+    err "failed to extract tuwunel; existing binary preserved"
     return 1
   fi
-  docker rm -f "$cid" >/dev/null
-
-  chmod 0755 "$dest"
-  if verify "$dest"; then
-    ok "tuwunel installed: $("$dest" --version 2>/dev/null | head -n1)"
-  else
-    err "tuwunel was copied but '$dest --version' failed (wrong arch or missing libs?)"
+  docker rm "$cid" >/dev/null
+  chmod 0755 "$staged"
+  if [[ "$("$staged" --version 2>/dev/null)" != "tuwunel $TUWUNEL_VERSION" ]]; then
+    rm -f "$staged"
+    err "tuwunel version or platform verification failed; existing binary preserved"
     return 1
   fi
+  # Rename within the destination directory: no truncated executable or overwrite
+  # of a running binary. Database migrations happen at the next supervised start.
+  mv -f "$staged" "$dest"
+  ok "tuwunel $TUWUNEL_VERSION installed"
 }
 
 # ------------------------------------------------------------------- tor ----

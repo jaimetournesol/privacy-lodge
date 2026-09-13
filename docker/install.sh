@@ -13,7 +13,7 @@ command -v docker >/dev/null 2>&1 || { echo "Docker isn't installed. Install Doc
 docker info >/dev/null 2>&1 || { echo "Docker isn't running (or you lack permission). Start it and retry."; exit 1; }
 
 echo
-echo "  Privacy Lodge — your box"
+echo "  Privacy Lodge"
 echo "  ─────────────────────"
 echo
 echo "  1) Basic          messaging + calls, over Tor.            (~1.2 GB)"
@@ -30,7 +30,7 @@ esac
 
 # ── The box image ───────────────────────────────────────────────────────────────────────
 # Prefer the published image (no build toolchain needed); fall back to building locally.
-BOX_IMAGE="${PL_IMAGE:-jaimemelon/privacy-lodge-box:latest}"
+BOX_IMAGE="${PL_IMAGE:-jaimemelon/privacy-lodge-box:0.2.0}"
 echo
 echo "→ getting the box image ($BOX_IMAGE)"
 if ! docker pull "$BOX_IMAGE"; then
@@ -45,7 +45,7 @@ if [ "$WANT_AGENTS" = "1" ]; then
   # This used to default straight to the LOCAL tag `privacy-lodge-agent:dev` and build from
   # source, so the published agent image was never used by the front door — every fresh
   # install paid a multi-minute build and needed git/pip egress to get there.
-  AGENT_IMAGE="${PL_AGENT_IMAGE:-jaimemelon/privacy-lodge-agent:latest}"
+  AGENT_IMAGE="${PL_AGENT_IMAGE:-jaimemelon/privacy-lodge-agent:0.2.0}"
   echo
   if docker image inspect "$AGENT_IMAGE" >/dev/null 2>&1; then
     echo "→ agent image already present ($AGENT_IMAGE)"
@@ -54,7 +54,8 @@ if [ "$WANT_AGENTS" = "1" ]; then
     if ! docker pull "$AGENT_IMAGE"; then
       echo "  couldn't pull it — building from source instead (a few minutes)"
       AGENT_IMAGE="privacy-lodge-agent:dev"
-      docker build -t "$AGENT_IMAGE" "$HERE/agent"
+      (cd "$HERE/.." && node scripts/stage-agentnode.mjs)
+      docker build -f "$HERE/../src-tauri/agentnode-runtime/docker/Dockerfile" -t "$AGENT_IMAGE" "$HERE/../src-tauri/agentnode-runtime"
     fi
   fi
 fi

@@ -1,78 +1,57 @@
 # Release runbook
 
-How Privacy Lodge desktop releases work, and what is still blocked on the owner.
+Privacy Lodge ships Linux x86-64 `.deb` and `.AppImage` installers, plus Docker box
+and agent images. Windows and macOS use Docker; native installers for those
+platforms have not been accepted.
 
-## Pipeline overview
+## Source and validation
 
-- **CI** (`.github/workflows/ci.yml`) — every push/PR: Linux build, `svelte-check`,
-  `cargo check`/`cargo test`, and a `.deb`/`.AppImage` artifact upload.
-- **Release** (`.github/workflows/release.yml`) — push a tag matching `v*`
-  (e.g. `git tag v0.1.0 && git push origin v0.1.0`) to build all four targets
-  (linux-x64, win-x64, mac-arm64, mac-x64) via `tauri-apps/tauri-action` and
-  publish them to a **draft** GitHub release. Review the draft, then publish it
-  manually.
+Work through a feature branch and PR. Run `pnpm check`, `cargo test --locked` in
+`src-tauri`, `node --test scripts/test-stage-agentnode.mjs`, Python restore tests,
+and `./scripts/test-pl-box.sh`. CI repeats these checks and builds complete Linux
+installers. The restore smoke tests use throwaway volumes only.
 
-## Updater signing keypair (do this once)
+Agentnode remains private. Public builds use the 124-file reviewed snapshot under
+`vendor/agentnode-runtime`, never an implicit sibling checkout. The exact file list
+and SHA-256 inventory are `scripts/agentnode-runtime-files.json`; provenance and
+refresh rules are in `vendor/AGENTNODE.md`. Review the snapshot and scan it and all
+release changes with Gitleaks before publication. Verify checksum-only findings
+against the actual files; never dismiss a credential finding as a blanket exception.
+Do not include local state, credentials, repository metadata, tests or deployment
+tools from the private repository.
 
-The Tauri updater verifies downloads with a minisign signature. Generate the
-keypair locally:
+## Build and publish
 
-```sh
-pnpm tauri signer generate -w ~/.tauri/privacy-lodge.key
-```
+1. Merge a passing PR, then tag the merged revision. The `v*` workflow builds Linux
+   installers into a draft GitHub release. Wait for that workflow to finish.
+2. Build the matching Docker images. Box: stage sidecars, build the release binary
+   and `pl-crypt`, then run `docker/build.sh`. Agents: run `pnpm stage:agentnode`,
+   then build `src-tauri/agentnode-runtime` with its `docker/Dockerfile`. Never use
+   the entire private Agentnode checkout as a public image build context.
+3. Test the resulting runtime with the isolated Docker lifecycle test and inspect
+   installer contents. Push `jaimemelon/privacy-lodge-box:<version>` and
+   `jaimemelon/privacy-lodge-agent:<version>`; verify their registry digests.
+4. Create the signed update manifest locally using `scripts/sign-release.sh`.
+   It requires both Ed25519 and SLH-DSA signing keys, which stay outside Git and
+   GitHub Actions. The script verifies both signatures before publication.
+5. Replace stale draft assets and release notes, attach the manifest and both
+   signatures, and publish only after checking that all assets match the release.
 
-This writes:
+## Upgrading to 0.2.0
 
-- `~/.tauri/privacy-lodge.key` — the **private** key. Never commit it.
-- `~/.tauri/privacy-lodge.key.pub` — the **public** key. Goes into the updater
-  plugin config in `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) —
-  that file is owned by the app workstream, not this runbook.
+This version needs updated sidecars and Agentnode resources. Its signed manifest
+must have an empty `native` map: use
+`./scripts/sign-release.sh 0.2.0 --installer-only <notes-file>`.
+Native users must install the complete `.deb` or use the complete `.AppImage`;
+the older executable-only updater cannot deliver those resources. Do not publish
+a raw native binary as an in-app update for this release.
 
-You will be prompted for an optional password; record it if you set one.
+Docker users back up first, update their Compose/helper files from this release,
+and then run `./pl-box update 0.2.0`. Existing identities and data must be preserved.
+The new Agentnode containers use separate state volumes; old agent data is retained,
+but legacy agent sessions are not automatically converted into Agentnode sessions.
+Tuwunel upgrades its database; never put the old homeserver binary back on an
+upgraded database. Restore a compatible pre-upgrade backup if rollback is required.
 
-## GitHub secrets
-
-Repo → **Settings → Secrets and variables → Actions → New repository secret**:
-
-| Secret | Value | Status |
-| --- | --- | --- |
-| `TAURI_SIGNING_PRIVATE_KEY` | contents of `~/.tauri/privacy-lodge.key` | ready to set once keypair is generated |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | the keypair password (empty if none) | same |
-| `APPLE_CERTIFICATE` | base64 of the Developer ID Application `.p12` | **blocked (G4)** |
-| `APPLE_CERTIFICATE_PASSWORD` | `.p12` password | **blocked (G4)** |
-| `APPLE_SIGNING_IDENTITY` | e.g. `Developer ID Application: Tournesol (TEAMID)` | **blocked (G4)** |
-| `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID` | notarytool credentials (app-specific password) | **blocked (G4)** |
-| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` | service principal for Azure Trusted Signing | **blocked (G5)** |
-
-After setting a secret, uncomment the matching env slot in
-`.github/workflows/release.yml` (look for the `TODO(G4/G5)` markers).
-
-## How `latest.json` is produced
-
-When `TAURI_SIGNING_PRIVATE_KEY` is set (and the updater plugin is configured
-in `tauri.conf.json`), the build emits a `.sig` next to each updater artifact
-and `tauri-action` assembles a `latest.json` (version, per-platform download
-URLs, signatures) which it uploads as a release asset. The app's updater
-endpoint should point at:
-
-```
-https://github.com/jaimetournesol/privacy-lodge/releases/latest/download/latest.json
-```
-
-Note: `latest.json` only resolves after the draft release is **published** —
-drafts are not visible to the updater.
-
-## Blocked on the owner
-
-1. **G4 — Apple Developer account** (~$99/yr): Developer ID Application
-   certificate + notarization credentials. Until then, macOS builds are
-   unsigned and Gatekeeper quarantines them (users must right-click → Open, or
-   `xattr -dr com.apple.quarantine Privacy Lodge.app`).
-2. **G5 — Azure Trusted Signing account**: signing account + certificate
-   profile + service principal. Until then, Windows builds are unsigned and
-   SmartScreen warns on install. When ready, also uncomment the
-   `trusted-signing-cli` install step and the `signCommand` `--config`
-   override in `release.yml`.
-3. **Updater key** can be generated by anyone on the team today, but the
-   updater stays inert until the public key lands in `tauri.conf.json`
-   (app workstream) and the two `TAURI_SIGNING_*` secrets are set.
+The app's custom updater uses `update.json`, `update.json.sig` and
+`update.json.pqsig`. Tauri/minisign `latest.json` is not the active update mechanism.

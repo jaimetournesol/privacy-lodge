@@ -46,8 +46,8 @@ pub fn begin_setup(
 ) -> Result<(), String> {
     let box_name = box_name.trim().to_string();
     let username = username.trim().to_string();
-    if box_name.is_empty() {
-        return Err("Give your box a name first.".into());
+    if box_name.is_empty() || box_name.len() > 1024 {
+        return Err("Give Lodge a name of at most 1024 bytes.".into());
     }
     if username.is_empty() {
         return Err("Pick a username first.".into());
@@ -65,11 +65,16 @@ pub fn begin_setup(
                 .into(),
         );
     }
-    if password.trim().is_empty() {
-        return Err("Pick a password first.".into());
+    if password.trim().chars().count() < 8 || password.len() > 1024 {
+        return Err("Choose a password of at least 8 characters (at most 1024 bytes).".into());
     }
-    // Note: the password is handed to account creation during first run; we
-    // deliberately never persist it to disk.
+    let _identity = crate::identity_transaction::lock();
+    if state::read(&app, |inner| inner.phase != state::Phase::Fresh || inner.onion.is_some()) {
+        return Err("Setup is already under way. Use a fresh box to create another identity.".into());
+    }
+    // Validate secure storage before mutating the setup state.
+    let (mut key, _) = crate::crypto::key_for_encrypt()?;
+    zeroize::Zeroize::zeroize(&mut key);
 
     let mut rng = rand::thread_rng();
     let phrase: Vec<String> =
@@ -94,7 +99,9 @@ pub fn begin_setup(
         livekit_secret_bytes.iter().map(|b| format!("{b:02x}")).collect();
     let created = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
 
-    state::update(&app, |inner| {
+    let mut inner = state::Inner::default();
+    {
+        inner.phase = state::Phase::SettingUp;
         inner.box_name = box_name;
         inner.username = username;
         inner.created = created;
@@ -108,133 +115,44 @@ pub fn begin_setup(
         // phone and the box, so the box keeps its own credential (single-user
         // appliance) instead of dropping it after admin creation.
         inner.admin_password = password.clone();
-    });
-    state::persist(&app)?;
+    }
+    let dir = state::app_data_dir(&app)?;
+    let (boxed, secrets) = state::identity_snapshot(&inner).documents()?;
+    crate::identity_transaction::commit(&dir, &[
+        ("secrets.json", secrets.as_bytes()), ("pairings.json", b"{\"peers\":[]}"), ("box.json", boxed.as_bytes()),
+    ])?;
+    state::update(&app, |target| *target = inner);
 
-    // Real sidecars if the binaries are there, demo simulation otherwise. The
-    // password creates the admin account once, then is dropped (never
-    // persisted). Progress is observable via get_status().setup_stage.
+    // Real sidecars if the binaries are there, demo simulation otherwise.
+    // Progress is observable via get_status().setup_stage.
     supervisor::start_lifecycle(&app, Some(password));
     Ok(())
 }
 
-#[derive(Serialize)]
-pub struct RecoveryKit {
-    pub phrase: String,
-    pub onion: Option<String>,
-    pub created: String,
-    pub box_name: String,
-}
-
-fn kit_from_state(app: &AppHandle) -> Result<RecoveryKit, String> {
-    state::read(app, |inner| {
-        if inner.phrase.is_empty() {
-            return Err("No recovery kit yet — set up your box first.".to_string());
-        }
-        Ok(RecoveryKit {
-            phrase: inner.phrase.join(" "),
-            onion: inner.onion.clone(),
-            created: inner.created.clone(),
-            box_name: inner.box_name.clone(),
-        })
-    })
-}
-
+/// Export the actual encrypted identity, never unrelated recovery words.
 #[tauri::command]
-pub fn get_recovery_kit(app: AppHandle) -> Result<RecoveryKit, String> {
-    kit_from_state(&app)
-}
-
-/// `index` is 0-based into the phrase words.
-#[tauri::command]
-pub fn confirm_recovery_word(app: AppHandle, index: usize, word: String) -> Result<bool, String> {
-    state::read(&app, |inner| {
-        let expected = inner
-            .phrase
-            .get(index)
-            .ok_or_else(|| format!("No word at position {index}."))?;
-        Ok(expected.eq_ignore_ascii_case(word.trim()))
-    })
-}
-
-#[tauri::command]
-pub fn save_recovery_kit_html(app: AppHandle) -> Result<String, String> {
-    let kit = kit_from_state(&app)?;
+pub fn save_identity_backup(app: AppHandle, passphrase: String) -> Result<String, String> {
+    use std::io::Write;
+    use zeroize::Zeroize;
+    let mut passphrase = passphrase;
+    let envelope = crate::backup::create(&app, &passphrase);
+    passphrase.zeroize();
+    let envelope = envelope?;
     let downloads = dirs::download_dir().ok_or("Couldn't find your Downloads folder.")?;
-
-    let slug: String = kit
-        .box_name
-        .to_lowercase()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-    let filename = if slug.is_empty() {
-        "privacy-lodge-recovery-kit.html".to_string()
-    } else {
-        format!("privacy-lodge-recovery-kit-{slug}.html")
-    };
-    let path = downloads.join(filename);
-
-    let words_html: String = kit
-        .phrase
-        .split_whitespace()
-        .enumerate()
-        .map(|(i, w)| format!("<li><span class=\"num\">{}</span> {w}</li>", i + 1))
-        .collect();
-    let onion_line = kit.onion.as_deref().unwrap_or("(not minted yet — re-save this kit once your box is running)");
-
-    // Self-contained, printable: dark-on-white print style, no external assets.
-    let html = format!(
-        r#"<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>Privacy Lodge recovery kit — {box_name}</title>
-<style>
-  body {{ font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-         color: #1A1A1A; background: #FFFFFF; max-width: 640px; margin: 48px auto; padding: 0 24px; }}
-  h1 {{ font-size: 22px; }} h1 .dot {{ color: #F2B705; }}
-  .meta {{ color: #555; font-size: 14px; margin-bottom: 28px; }}
-  ol.phrase {{ list-style: none; padding: 0; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }}
-  ol.phrase li {{ border: 1px solid #ccc; border-radius: 12px; padding: 12px 14px;
-                  font-size: 18px; font-weight: 600; }}
-  ol.phrase .num {{ color: #999; font-weight: 400; margin-right: 6px; font-size: 13px; }}
-  .address {{ font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all;
-              border: 1px solid #ccc; border-radius: 12px; padding: 12px 14px; }}
-  .warning {{ margin-top: 28px; border-left: 4px solid #F2B705; padding: 8px 14px; font-size: 15px; }}
-  .note {{ color: #777; font-size: 13px; margin-top: 20px; }}
-  .sig {{ color: #777; font-size: 13px; margin-top: 36px; font-style: italic; }}
-  @media print {{ body {{ margin: 0 auto; }} }}
-</style>
-</head>
-<body>
-  <h1>Privacy Lodge recovery kit <span class="dot">●</span></h1>
-  <div class="meta">Box: <strong>{box_name}</strong> &nbsp;·&nbsp; Created: {created}</div>
-
-  <h2>Your six recovery words</h2>
-  <ol class="phrase">{words_html}</ol>
-
-  <h2>Your private address</h2>
-  <div class="address">{onion_line}</div>
-
-  <p class="warning">If you forget your password, this kit is the only way back in.
-  No company can reset it — that's the point.</p>
-
-  <p class="note">Printer spools retain copies — collect your printout.</p>
-
-  <p class="sig">Private, and a little slower — that's the deal.</p>
-</body>
-</html>
-"#,
-        box_name = kit.box_name,
-        created = kit.created,
-    );
-
-    std::fs::write(&path, html).map_err(|e| format!("Couldn't save the kit: {e}"))?;
+    std::fs::create_dir_all(&downloads).map_err(|e| e.to_string())?;
+    let nonce: u64 = rand::thread_rng().gen();
+    let path = downloads.join(format!("privacy-lodge-identity-{}-{nonce:016x}.json", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)] {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).map_err(|e| format!("Couldn't save the backup: {e}"))?;
+    if let Err(e) = file.write_all(envelope.as_bytes()).and_then(|_| file.sync_all()) {
+        let _ = std::fs::remove_file(&path);
+        return Err(format!("Couldn't finish the backup: {e}"));
+    }
     Ok(path.to_string_lossy().into_owned())
 }
 
@@ -267,9 +185,9 @@ pub fn get_connect_qr(app: AppHandle) -> Result<ConnectQr, String> {
     let (onion, username, token) = state::read(&app, |inner| {
         (inner.onion.clone(), inner.username.clone(), inner.token.clone())
     });
-    let onion = onion.ok_or("Your box doesn't have an address yet.")?;
+    let onion = onion.ok_or("Lodge doesn't have an address yet.")?;
     if token.is_empty() {
-        return Err("Set up your box first.".into());
+        return Err("Set up Lodge first.".into());
     }
     let payload = format!("privacybolt://connect?hs={onion}&user={username}&token={token}");
     let svg = render_qr_svg(&payload)?;
@@ -310,9 +228,9 @@ pub struct JoinInfo {
 pub fn get_join_info(app: AppHandle) -> Result<JoinInfo, String> {
     let (onion, join_token) =
         state::read(&app, |inner| (inner.onion.clone(), inner.join_token.clone()));
-    let onion = onion.ok_or("Your box doesn't have an address yet.")?;
+    let onion = onion.ok_or("Lodge doesn't have an address yet.")?;
     if join_token.is_empty() {
-        return Err("Set up your box first.".into());
+        return Err("Set up Lodge first.".into());
     }
     let payload = format!("privacybolt://join?hs={onion}&token={join_token}");
     let svg = render_qr_svg(&payload)?;
@@ -343,22 +261,24 @@ pub fn app_info(app: AppHandle) -> Result<AppInfo, String> {
 /// irreversible — the onion identity is gone. (Plan task T-UNINST; the GUI heir
 /// of `privacy-lodge reset`.) The frontend confirms before calling this.
 #[tauri::command]
-pub fn reset_box(app: AppHandle) -> Result<(), String> {
-    supervisor::stop_lifecycle(&app);
+pub async fn reset_box(app: AppHandle) -> Result<(), String> {
+    let _stopped = supervisor::stop_lifecycle(&app).await;
+    let _agents = crate::agentnode_runtime::stop(true).await?;
+    let _identity = crate::identity_transaction::lock();
     let dir = state::app_data_dir(&app)?;
-    // Remove the mutable subdirs + secrets, but leave the (possibly bundled)
-    // bin/ dir alone so the next setup still finds the sidecars.
-    for sub in ["data", "config"] {
-        let p = dir.join(sub);
-        if p.exists() {
-            std::fs::remove_dir_all(&p).map_err(|e| format!("couldn't remove {}: {e}", p.display()))?;
-        }
-    }
-    for f in ["box.json", "secrets.json"] {
-        let p = dir.join(f);
-        let _ = std::fs::remove_file(&p);
+    // This is the application's dedicated data directory. Pairings, pending
+    // identity transactions and command receipts belong to the erased identity too.
+    // Preserve only installed sidecars; never follow a symlink outside the directory.
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if entry.file_name() == "bin" { continue; }
+        let result = if entry.file_type().map_err(|e| e.to_string())?.is_dir() {
+            std::fs::remove_dir_all(entry.path())
+        } else { std::fs::remove_file(entry.path()) };
+        result.map_err(|e| format!("Could not finish erasing local identity data: {e}"))?;
     }
     state::reset_to_fresh(&app);
+    crate::setup_server::restart(app.clone());
     Ok(())
 }
 
@@ -375,7 +295,7 @@ pub struct PairCodeOut {
 #[tauri::command]
 pub fn pair_create(app: AppHandle) -> Result<PairCodeOut, String> {
     let onion = state::read(&app, |i| i.onion.clone())
-        .ok_or("Your box doesn't have an address yet.")?;
+        .ok_or("Lodge doesn't have an address yet.")?;
     let mut rng = rand::thread_rng();
     let nonce: [u8; 8] = rng.gen();
     let nonce_hex: String = nonce.iter().map(|b| format!("{b:02x}")).collect();
@@ -461,8 +381,9 @@ fn refresh_paired_count(app: &AppHandle, dir: &std::path::Path) {
 }
 
 #[tauri::command]
-pub fn stop_box(app: AppHandle) -> Result<(), String> {
-    supervisor::stop_lifecycle(&app);
+pub async fn stop_box(app: AppHandle) -> Result<(), String> {
+    let _stopped = supervisor::stop_lifecycle(&app).await;
+    let _agents = crate::agentnode_runtime::stop(false).await?;
     Ok(())
 }
 
@@ -470,7 +391,7 @@ pub fn stop_box(app: AppHandle) -> Result<(), String> {
 pub fn start_box(app: AppHandle) -> Result<(), String> {
     let configured = state::read(&app, |inner| inner.phase != Phase::Fresh && !inner.box_name.is_empty());
     if !configured {
-        return Err("Set up your box first.".into());
+        return Err("Set up Lodge first.".into());
     }
     // Restart of an already-set-up box: the admin account already exists.
     supervisor::start_lifecycle(&app, None);

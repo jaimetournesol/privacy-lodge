@@ -11,6 +11,7 @@
   } from "$lib/api";
   import { onDestroy } from "svelte";
   import { mapError } from "$lib/errors";
+  import AgentnodePanel from "./AgentnodePanel.svelte";
   import SettingsPanel from "./SettingsPanel.svelte";
   import BoxesPanel from "./BoxesPanel.svelte";
   import Sunflower from "./Sunflower.svelte";
@@ -21,6 +22,7 @@
   // not live, so we say so instead of leaving a green "all good" lie on screen.
   const live = $derived($liveness);
   const stale = $derived(live.stale);
+  const coreHealthy = $derived(["homeserver", "tor"].every(name => st.services.some(service => service.name === name && service.state === "healthy")));
 
   // A 1 s clock so "last seen Xs ago" counts up live while contact is lost.
   let now = $state(Date.now());
@@ -56,13 +58,13 @@
   const nav: { key: View; label: string; soon?: boolean }[] = [
     { key: "home", label: "Home" },
     { key: "people", label: "People" },
-    { key: "agent", label: "Agent", soon: true },
+    { key: "agent", label: "Agents" },
     { key: "settings", label: "Settings" },
   ];
 
   const actionCards: { title: string; blurb: string; go?: View }[] = [
     { title: "Add a person", blurb: "Pair with a friend's box.", go: "people" },
-    { title: "Back up now", blurb: "Keep a fresh copy of your keys.", go: "settings" },
+    { title: "Protect your identity", blurb: "Export your address, login and contacts.", go: "settings" },
   ];
 
   // Map a service state to its status-dot class (healthy=green, starting=amber,
@@ -173,12 +175,14 @@
 
   {#if view === "people"}
     <main class="content"><BoxesPanel {st} /></main>
+  {:else if view === "agent"}
+    <main class="content"><AgentnodePanel /></main>
   {:else if view === "settings"}
     <main class="content"><SettingsPanel {st} /></main>
   {:else}
   <main class="content">
     <header class="topline">
-      <h1>{st.box_name || "Your box"}</h1>
+      <h1>{st.box_name || "Lodge"}</h1>
       <p class="dim counts" class:frozen={stale}>
         {st.people_count}
         {st.people_count === 1 ? "person" : "people"} &middot; {st.paired_count}
@@ -215,8 +219,8 @@
         </button>
       {:else if st.phase === "running"}
         <p class="sentence">
-          <span class="dot-ok" aria-hidden="true">&#9679;</span> All good. Reachable
-          over the private network.
+          <span class={coreHealthy ? "dot-ok" : "dot-warn"} aria-hidden="true">&#9679;</span>
+          {coreHealthy ? "Messaging and the private network are running." : "Lodge is running, but a service needs attention."}
         </p>
         <button
           class="btn btn-subtle"
@@ -227,7 +231,7 @@
         </button>
       {:else if st.phase === "stopped"}
         <p class="sentence">
-          <span class="dim" aria-hidden="true">&#9702;</span> Your box is paused —
+          <span class="dim" aria-hidden="true">&#9702;</span> Lodge is paused —
           people can't reach you.
         </p>
         <button
@@ -240,7 +244,7 @@
       {:else if st.phase === "error"}
         <p class="sentence">
           <span class="dot-err" aria-hidden="true">&#9679;</span> Something's not
-          right — your box hit an error.
+          right — {st.error || "Lodge hit an error."}
         </p>
         <button
           class="btn btn-subtle"
@@ -349,7 +353,7 @@
     </section>
 
     <footer class="foot dim">
-      Your box runs while this computer is on — keep it awake and plugged in.
+      Lodge runs while this computer is on — keep it awake and plugged in.
     </footer>
   </main>
   {/if}
@@ -369,6 +373,11 @@
   /* ── left rail ── */
 
   .rail {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    align-self: start;
+    overflow-y: auto;
     border-right: 1px solid var(--hairline);
     padding: var(--sp-5) var(--sp-3);
     display: flex;

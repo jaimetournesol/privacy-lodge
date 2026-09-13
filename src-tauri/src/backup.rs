@@ -17,6 +17,7 @@
 
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
 use rand::RngCore;
+use zeroize::Zeroize;
 use tauri::AppHandle;
 
 use crate::{config, crypto, pairing, state};
@@ -25,6 +26,7 @@ use crate::{config, crypto, pairing, state};
 const KDF_ITERS: u32 = 200_000;
 /// Envelope format version, so a future restore can tell what it's looking at.
 const FORMAT_VERSION: u32 = 1;
+pub const MAX_ENVELOPE_BYTES: usize = 1024 * 1024;
 
 /// Derive the 32-byte AES key from the passphrase + per-backup salt.
 fn derive_key(passphrase: &str, salt: &[u8]) -> [u8; 32] {
@@ -97,10 +99,12 @@ pub fn create(app: &AppHandle, passphrase: &str) -> Result<String, String> {
 
     let mut salt = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut salt);
-    let key = derive_key(passphrase, &salt);
+    let mut key = derive_key(passphrase, &salt);
     // crypto::encrypt is AES-256-GCM and prepends a fresh random nonce (same primitive that
     // protects secrets.json at rest).
-    let sealed = crypto::encrypt(&payload, &key)?;
+    let sealed = crypto::encrypt(&payload, &key);
+    key.zeroize();
+    let sealed = sealed?;
 
     Ok(serde_json::json!({
         "v": FORMAT_VERSION,
@@ -118,6 +122,9 @@ pub fn create(app: &AppHandle, passphrase: &str) -> Result<String, String> {
 /// A wrong passphrase fails closed here (GCM authentication), never half-applied.
 #[allow(dead_code)] // used by the restore path (setup page)
 pub fn open(envelope_json: &str, passphrase: &str) -> Result<serde_json::Value, String> {
+    if envelope_json.len() > MAX_ENVELOPE_BYTES {
+        return Err("Identity backup exceeds the 1 MiB size limit.".into());
+    }
     let env: serde_json::Value =
         serde_json::from_str(envelope_json).map_err(|_| "That doesn't look like a Privacy Lodge backup file.".to_string())?;
     let v = env.get("v").and_then(|x| x.as_u64()).unwrap_or(0);
@@ -125,15 +132,25 @@ pub fn open(envelope_json: &str, passphrase: &str) -> Result<serde_json::Value, 
         return Err(format!("Unsupported backup format (v{v})."));
     }
     let salt_b64 = env.get("salt").and_then(|x| x.as_str()).ok_or("backup is missing its salt")?;
-    let iters = env.get("iters").and_then(|x| x.as_u64()).unwrap_or(KDF_ITERS as u64) as u32;
+    // v1 has one fixed KDF contract. Never execute attacker-chosen work or
+    // truncate a u64 iteration count into a different u32 value.
+    if env.get("kdf").and_then(|x| x.as_str()) != Some("pbkdf2-hmac-sha256")
+        || env.get("iters").and_then(|x| x.as_u64()) != Some(KDF_ITERS as u64) {
+        return Err("Unsupported backup key derivation parameters.".into());
+    }
     let sealed = env.get("blob").and_then(|x| x.as_str()).ok_or("backup is missing its payload")?;
     let salt = B64.decode(salt_b64).map_err(|_| "backup salt is corrupt".to_string())?;
 
-    let mut key = [0u8; 32];
-    pbkdf2::pbkdf2_hmac::<sha2::Sha256>(passphrase.as_bytes(), &salt, iters, &mut key);
-    let plain = crypto::decrypt(sealed, &key)
-        .map_err(|_| "Wrong passphrase, or this backup file is damaged.".to_string())?;
-    serde_json::from_str(&plain).map_err(|_| "Backup contents are corrupt.".to_string())
+    if salt.len() != 16 {
+        return Err("Backup salt must be exactly 16 bytes.".into());
+    }
+    let mut key = derive_key(passphrase, &salt);
+    let plain = crypto::decrypt(sealed, &key);
+    key.zeroize();
+    let mut plain = plain.map_err(|_| "Wrong passphrase, or this backup file is damaged.".to_string())?;
+    let result = serde_json::from_str(&plain).map_err(|_| "Backup contents are corrupt.".to_string());
+    plain.zeroize();
+    result
 }
 
 /// Restore a backup onto a **fresh** box: writes the onion key back, re-instates the admin
@@ -144,78 +161,38 @@ pub fn open(envelope_json: &str, passphrase: &str) -> Result<serde_json::Value, 
 /// Refuses to run on a box that already has an identity: restore is a takeover primitive and
 /// must never silently overwrite a live box.
 pub fn restore(app: &AppHandle, envelope_json: &str, passphrase: &str) -> Result<(), String> {
-    if state::read(app, |i| i.onion.is_some()) {
-        return Err("This box already has an identity — restore onto a fresh box instead.".into());
+    let _identity = crate::identity_transaction::lock();
+    if state::read(app, |i| i.phase != state::Phase::Fresh || i.onion.is_some()) {
+        return Err("This box already has an identity or setup in progress. Restore onto a fresh box.".into());
     }
-    let p = open(envelope_json, passphrase)?;
-    let s = |k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-    let hostname = s("hostname");
-    let hs_secret = B64
-        .decode(s("hs_secret"))
-        .map_err(|_| "This backup's key material is corrupt.".to_string())?;
-    let hs_public = B64
-        .decode(s("hs_public"))
-        .map_err(|_| "This backup's key material is corrupt.".to_string())?;
-    if hostname.is_empty() || hs_secret.is_empty() {
-        return Err("This backup is missing its onion key.".into());
-    }
-
-    let paths = config::ensure_dirs(app)?;
-    std::fs::create_dir_all(&paths.hs_dir)
-        .map_err(|e| format!("couldn't create the hidden-service dir: {e}"))?;
-    let write = |name: &str, bytes: &[u8]| -> Result<(), String> {
-        let path = paths.hs_dir.join(name);
-        std::fs::write(&path, bytes).map_err(|e| format!("couldn't write {name}: {e}"))?;
-        // tor REFUSES to use a hidden-service dir with loose permissions.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    let payload = open(envelope_json, passphrase)?;
+    let identity = crate::identity_restore::validate(&payload)?;
+    // Validate and encrypt everything before publishing any identity file. The
+    // journal rolls back interrupted publication before startup can read state.
+    let dir = state::app_data_dir(app)?;
+    let (boxed, secrets) = state::identity_snapshot(&identity.inner).documents()?;
+    let added_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs()).unwrap_or(0);
+    let peers = pairing::Pairings { peers: identity.peers.into_iter()
+        .map(|onion| pairing::Pairing { onion, added_at }).collect() };
+    let pairings = serde_json::to_vec(&peers).map_err(|e| e.to_string())?;
+    let hostname = format!("{}\n", identity.inner.onion.as_deref().unwrap());
+    let result = crate::identity_transaction::commit(&dir, &[
+        ("secrets.json", secrets.as_bytes()), ("pairings.json", &pairings),
+        ("data/tor/hs/hostname", hostname.as_bytes()),
+        ("data/tor/hs/hs_ed25519_secret_key", &identity.secret),
+        ("data/tor/hs/hs_ed25519_public_key", &identity.public),
+        ("box.json", boxed.as_bytes()),
+    ]);
+    if let Err(error) = result {
+        // A failed fsync/recovery may leave durable data pending. Do not offer a
+        // fresh setup against it; restart will resolve the journal first.
+        if dir.join(".identity-transaction.json").exists() || dir.join("box.json").exists() {
+            state::update(app, |i| { i.phase = state::Phase::Error; i.error = Some(error.clone()); });
         }
-        Ok(())
-    };
-    write("hostname", format!("{hostname}\n").as_bytes())?;
-    write("hs_ed25519_secret_key", &hs_secret)?;
-    write("hs_ed25519_public_key", &hs_public)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&paths.hs_dir, std::fs::Permissions::from_mode(0o700));
+        return Err(error);
     }
-
-    let phrase: Vec<String> = p
-        .get("phrase")
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
-        .unwrap_or_default();
-
-    // Secrets go back into state and are re-encrypted under THIS box's key by persist(), so the
-    // original machine's PL_SECRETS_KEY is never needed.
-    state::update(app, |i| {
-        i.box_name = s("box_name");
-        i.username = s("username");
-        i.created = s("created");
-        i.onion = Some(hostname.clone());
-        i.phrase = phrase;
-        i.token = s("token");
-        i.turn_secret = s("turn_secret");
-        i.join_token = s("join_token");
-        i.livekit_api_key = s("livekit_api_key");
-        i.livekit_api_secret = s("livekit_api_secret");
-        i.admin_password = s("admin_password");
-    });
-    state::persist(app)?;
-
-    // Re-instate the federation allowlist so previously paired peers can reach us again.
-    for o in p.get("pairings").and_then(|v| v.as_array()).cloned().unwrap_or_default() {
-        if let Some(o) = o.as_str() {
-            if pairing::is_valid_onion(o) && o != hostname {
-                let _ = pairing::add(&paths.data_root, o);
-            }
-        }
-    }
-    eprintln!("[privacy-lodge] restored identity for {hostname}");
+    state::update(app, |i| *i = identity.inner);
     Ok(())
 }
 
@@ -227,8 +204,9 @@ mod tests {
     fn seal(payload: &serde_json::Value, passphrase: &str) -> String {
         let mut salt = [0u8; 16];
         rand::thread_rng().fill_bytes(&mut salt);
-        let key = derive_key(passphrase, &salt);
+        let mut key = derive_key(passphrase, &salt);
         let sealed = crypto::encrypt(&payload.to_string(), &key).unwrap();
+        key.zeroize();
         serde_json::json!({
             "v": FORMAT_VERSION,
             "kdf": "pbkdf2-hmac-sha256",
@@ -251,6 +229,20 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_identity_round_trip_preserves_keys_and_rejects_inconsistent_payloads() {
+        let payload = crate::identity_restore::tests::payload();
+        let envelope = seal(&payload, "identity round trip");
+        let restored = crate::identity_restore::validate(&open(&envelope, "identity round trip").unwrap()).unwrap();
+        assert_eq!(restored.inner.onion.as_deref(), payload["hostname"].as_str());
+        assert_eq!(B64.encode(restored.secret.as_slice()), payload["hs_secret"]);
+        let mut inconsistent = payload;
+        inconsistent["hostname"] = format!("{}.onion", "a".repeat(56)).into();
+        let envelope = seal(&inconsistent, "identity round trip");
+        let decrypted = open(&envelope, "identity round trip").unwrap();
+        assert!(crate::identity_restore::validate(&decrypted).is_err());
+    }
+
+    #[test]
     fn wrong_passphrase_fails_closed() {
         let payload = serde_json::json!({ "hs_secret": "c3VwZXItc2VjcmV0" });
         let env = seal(&payload, "correct horse battery");
@@ -265,6 +257,18 @@ mod tests {
         // The envelope may expose the (public) onion, but never the key material.
         assert!(!env.contains("TOPSECRETKEYMATERIAL"));
         assert!(env.contains("example.onion"));
+    }
+
+    #[test]
+    fn rejects_unbounded_kdf_and_oversized_envelopes_before_deriving() {
+        let base = serde_json::json!({"v":1,"kdf":"pbkdf2-hmac-sha256","iters":KDF_ITERS,"salt":B64.encode([0u8;16]),"blob":"invalid"});
+        for iterations in [0u64, 1, u32::MAX as u64 + 1, u64::MAX] {
+            let mut envelope = base.clone(); envelope["iters"] = iterations.into();
+            assert!(open(&envelope.to_string(), "passphrase").unwrap_err().contains("parameters"));
+        }
+        let mut envelope = base; envelope["salt"] = B64.encode([0u8;17]).into();
+        assert!(open(&envelope.to_string(), "passphrase").unwrap_err().contains("16 bytes"));
+        assert!(open(&"x".repeat(MAX_ENVELOPE_BYTES+1), "passphrase").unwrap_err().contains("size limit"));
     }
 
     #[test]

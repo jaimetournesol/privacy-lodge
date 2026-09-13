@@ -1,0 +1,258 @@
+/* Privacy Bolt: the live Conductor stage remains visible while you type. */
+body.lodge {
+  color-scheme:light; --border-strong:#968572; --warn:#8a5b12;
+  --bg:#f7f2e9; --panel:#fffdf8; --panel2:#eee5d7; --text:#42392f;
+  --muted:#75614f; --accent:#9a4a32; --accent-soft:#f3e2d7; --border:#e1d6c6;
+  background:var(--bg); height:100dvh; display:grid!important; grid-template-rows:56px minmax(0,1fr);
+  font-family:system-ui,sans-serif;
+}
+body.lodge header { display:flex!important; padding:0 16px; gap:8px; background:var(--bg); }
+body.lodge header h1 span { background:none; color:var(--text); }
+body.lodge header h1::before { background:var(--accent); box-shadow:none; animation:none; }
+body.lodge header .pill, body.lodge #btnVoiceMode, body.lodge #btnPresent,
+body.lodge #btnRestart, body.lodge #btnNew, body.lodge #btnInterrupt,
+body.lodge #side, body.lodge #sideTab, body.lodge #mobileNav, body.lodge #vo,
+body.lodge #stageBar, body.lodge #timeline, body.lodge #stageSessionBar,
+body.lodge #btnChatClose, body.lodge #chatWhere, body.lodge #chatWho,
+body.lodge .settings-voice, body.lodge #voiceMenu { display:none!important; }
+body.lodge main { display:grid!important; grid-template-columns:minmax(0,1fr)!important; grid-template-rows:minmax(120px,1.1fr) minmax(210px,1fr); padding:0; gap:0; min-height:0; }
+body.lodge #left { position:relative!important; display:flex!important; inset:auto!important; min-height:0; width:auto!important; border:0; }
+body.lodge #stage { flex:1; padding:8px 12px; min-height:0; }
+body.lodge #stage .tile { border-radius:16px; border:1px solid var(--border); }
+body.lodge #chatPane { display:flex!important; position:relative!important; inset:auto!important; width:auto!important; height:auto!important; min-height:0; border:0; border-top:1px solid var(--border); background:var(--panel); border-radius:20px 20px 0 0; }
+body.lodge #chatHead { display:flex!important; min-height:48px; padding:4px 12px; gap:6px; flex-shrink:0; overflow-x:auto; }
+body.lodge #mobileProject { display:block!important; flex:1; min-width:80px; max-width:240px; }
+body.lodge #log { flex:1; min-height:0; padding:12px 16px; font-size:15px; }
+body.lodge #composer { position:relative; display:flex; margin:0; padding:10px 12px; gap:8px; background:var(--panel); flex-shrink:0; }
+body.lodge #input { min-height:48px; max-height:120px; font-size:16px; background:var(--bg); border:1px solid var(--border); border-radius:20px; padding:12px 16px; }
+body.lodge button, body.lodge select { min-height:44px; font-size:14px; }
+body.lodge button.primary { background:var(--accent); color:#fffdf8; }
+body.lodge #btnSend { width:48px; height:48px; border-radius:50%; flex-shrink:0; }
+body.lodge #btnSettings { margin-left:0; }
+body.lodge .lodge-stage-actions { display:flex; align-items:center; gap:8px; margin-left:auto; }
+body.lodge header h1 { min-width:0; flex-shrink:1; }
+@media(max-width:359px) {
+  body.lodge header { padding:0 12px; gap:6px; }
+  body.lodge header h1::before { display:none; }
+  body.lodge .lodge-stage-actions { gap:6px; }
+}
+body.lodge :focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+body.lodge .settings-voice + details, body.lodge #settings h3:first-of-type { display:none; }
+#lodgeAccount { display:none; }
+body.lodge #lodgeAccount { display:block; padding:0 12px 8px; }
+#lodgeAccount summary { cursor:pointer; min-height:40px; padding:10px 0; }
+#lodgeAccount p { margin:4px 0 12px; color:var(--muted); font-size:14px; }
+#lodgeAccounts { display:grid; gap:8px; }
+.lodge-account { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px; background:var(--bg); border-radius:12px; }
+.lodge-account strong { flex:1; }
+.lodge-account code { font:600 20px ui-monospace,monospace; letter-spacing:2px; }
+.lodge-account a { color:var(--accent); padding:12px 0; }
+body.lodge.keyboard main { grid-template-rows:minmax(100px,.7fr) minmax(160px,1fr); }
+@media (min-width:1000px) { body.lodge main { max-width:1440px; width:100%; margin:0 auto; grid-template-rows:minmax(180px,1.5fr) minmax(260px,1fr); } }
+@media (prefers-reduced-motion:reduce) { body.lodge *, body.lodge *::before, body.lodge *::after { animation:none!important; transition:none!important; } }
+body.lodge { padding:0!important; }
+body.lodge #chatHead { flex-wrap:nowrap; }
+body.lodge #btnRevokeApproval, body.lodge #btnHome, body.lodge #btnAgentRename { display:none!important; }
+body.lodge #lodgeAccount { max-height:58%; overflow-y:auto; flex-shrink:1; }
+body.lodge #composer .composer-action { position:static; margin:0; }
+body.lodge #input { flex:1; width:0; padding:12px 16px; }
+body.lodge #btnAttach { width:44px; flex-shrink:0; }
+body.lodge #log:empty::after { content:"Conductor will present its work above. Your conversation stays here."; color:var(--muted); font-size:14px; }
+/* Product navigation: switching sections never unmounts chat or presentation. */
+body.lodge { grid-template-rows:56px minmax(0,1fr) auto; --user:#eeded0; --accent2:#9a4a32; --cyan:#895339; --ok:#526b39; --err:#b3261e; --sans:system-ui,sans-serif; }
+body.lodge header { grid-row:1; border-bottom:1px solid var(--border); }
+body.lodge main { grid-row:2; grid-column:1; }
+body.lodge #left { flex-direction:column; }
+body.lodge #stage { position:relative; width:100%; box-sizing:border-box; }
+body.lodge #mobileProject,body.lodge #agentSel,body.lodge #btnApproval,body.lodge #btnActivateAgent,body.lodge #btnStartAgent { display:none!important; }
+body.lodge #chatHead { overflow:visible; padding:8px 14px; min-height:60px; box-sizing:border-box; }
+.lodge-chat-identity { display:flex; flex-direction:column; min-width:0; flex:1; }
+.lodge-chat-identity strong { font-size:16px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.lodge-chat-identity span { color:var(--muted); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+body.lodge #chatHead > .spacer { display:none; }
+body.lodge #input { min-height:48px; max-height:104px; }
+body.lodge #composer { align-items:flex-end; }
+body.lodge .lodge-chat-gate { display:flex; align-items:center; gap:10px; padding:8px 14px; background:var(--accent-soft); font-size:13px; flex-shrink:0; }
+.lodge-chat-gate span { flex:1; }
+body.lodge [hidden] { display:none!important; }
+body.lodge #lodgeNav { grid-row:3; grid-column:1; display:grid; grid-template-columns:repeat(4,1fr); padding:4px 8px max(4px,env(safe-area-inset-bottom)); border-top:1px solid var(--border); background:var(--bg); z-index:6; }
+#lodgeNav button { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; border:0; border-radius:14px; background:transparent; padding:7px 4px; color:var(--muted); min-height:56px; }
+#lodgeNav button > span:first-child { font-size:21px; line-height:22px; }
+#lodgeNav button > span:last-child { font-size:12px; }
+#lodgeNav button[aria-current] { background:var(--accent-soft); color:var(--accent); }
+body.lodge[data-lodge-view=machines] main,body.lodge[data-lodge-view=chats] main { visibility:hidden; pointer-events:none; }
+body.lodge[data-lodge-view=stage] main { grid-template-rows:minmax(0,1fr) minmax(180px,.35fr); }
+body.lodge #lodgeBrowse { grid-row:2; grid-column:1; overflow-y:auto; padding:20px max(16px,calc((100% - 1120px)/2)); min-width:0; background:var(--bg); z-index:5; }
+.lodge-browse-top { max-width:800px; margin-bottom:20px; }
+.lodge-browse-top h2 { margin:8px 0; font-size:28px; letter-spacing:-.5px; }
+.lodge-browse-top p { color:var(--muted); line-height:1.5; }
+.lodge-browse-top .lodge-field { display:inline-flex; vertical-align:top; width:calc(50% - 8px); margin-right:8px; }
+.lodge-browse-top .lodge-field:last-child { margin-right:0; }
+#lodgeBrowseList { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr)); gap:14px; padding-bottom:16px; align-items:start; }
+.lodge-machine { padding:18px; border:1px solid var(--border); border-radius:20px; background:var(--panel); min-width:0; }
+.lodge-machine h3 { margin:0; font-size:18px; }
+.lodge-machine p { margin:6px 0 14px; }
+.lodge-row { display:flex; align-items:center; gap:12px; justify-content:space-between; }
+.lodge-row > div { min-width:0; }
+.lodge-row h2 { flex:1; }
+.lodge-muted { color:var(--muted); font-size:14px; line-height:1.5; overflow-wrap:anywhere; }
+.lodge-badge { border:1px solid #b9ac98; color:var(--accent); border-radius:30px; padding:5px 9px; font-size:12px; white-space:nowrap; }
+.lodge-badge.offline { color:var(--muted); border-color:var(--border); }
+.lodge-actions { display:flex; gap:8px; flex-wrap:wrap; margin:14px 0 4px; }
+.lodge-actions button { flex:1 1 auto; }
+.lodge-workspace { display:flex; align-items:center; gap:8px; padding:14px 0; border-top:1px solid var(--border); min-width:0; }
+.lodge-workspace > div { flex:1; display:flex; flex-direction:column; min-width:0; gap:4px; }
+.lodge-workspace strong { overflow-wrap:anywhere; }
+.lodge-workspace button { flex-shrink:0; }
+body.lodge .lodge-dialog { background:var(--panel); color:var(--text); border:1px solid var(--border); border-radius:24px; padding:20px; width:min(540px,calc(100vw - 24px)); max-height:calc(100dvh - 28px); box-sizing:border-box; overflow:auto; }
+.lodge-dialog::backdrop { background:#42392f66; }
+.lodge-dialog h2 { margin:0; font-size:23px; line-height:1.2; }
+.lodge-dialog h3 { margin:4px 0; }
+.lodge-dialog > button[aria-pressed] { display:block; width:100%; margin-top:8px; text-align:left; white-space:normal; overflow-wrap:anywhere; }
+.lodge-dialog > button[aria-pressed=true] { border-color:var(--accent); background:var(--accent-soft); color:var(--accent); }
+.lodge-dialog > .lodge-row { position:sticky; top:-20px; background:var(--panel); padding:8px 0; z-index:2; }
+.lodge-dialog > .lodge-row button { flex-shrink:0; }
+.lodge-dialog .lodge-field { width:100%; }
+.lodge-field { display:flex; flex-direction:column; gap:7px; margin:14px 0; font-size:14px; color:var(--text); }
+.lodge-field input,.lodge-field select,.lodge-dialog textarea { width:100%; min-height:48px; border-radius:12px; padding:10px 12px; background:var(--bg); color:var(--text); border:1px solid var(--border); font:inherit; font-size:16px; box-sizing:border-box; }
+.lodge-field input:disabled { opacity:.7; }
+.lodge-check { display:flex; align-items:flex-start; gap:12px; padding:14px 0; font-size:14px; line-height:1.5; }
+.lodge-check input { width:24px; height:24px; flex-shrink:0; accent-color:var(--accent); }
+.lodge-dialog summary { min-height:44px; padding:12px 0; box-sizing:border-box; cursor:pointer; }
+.lodge-dialog form > button[type=submit] { width:100%; margin:4px 0; }
+.lodge-form-status { color:var(--accent); line-height:1.5; overflow-wrap:anywhere; }
+.lodge-dialog pre { overflow:auto; padding:12px; font-size:12px; background:var(--bg); border-radius:12px; }
+.lodge-notice { padding:16px; border-radius:16px; background:var(--panel2); line-height:1.5; }
+body.lodge .lodge-account { display:flex; flex-direction:column; align-items:stretch; gap:12px; padding:16px; }
+.lodge-account p { margin:0; }
+.lodge-account code { padding:12px; background:var(--panel); text-align:center; border-radius:12px; }
+.lodge-link { display:block; text-align:center; min-height:44px; }
+body.lodge button:disabled { opacity:.45; cursor:default; }
+body.lodge #log:empty::after { content:'Start with a question or a task. Presented work stays on the stage above.'; }
+body.lodge .tile.kind-fleet .tb { background:var(--panel); }
+body.lodge .tile.kind-fleet .ambClock { display:none; }
+body.lodge .tile .th { min-height:36px; }
+@media(min-width:1000px) {
+  body.lodge { grid-template-columns:108px minmax(0,1fr); grid-template-rows:64px minmax(0,1fr); }
+  body.lodge header { grid-column:1 / -1; }
+  body.lodge main,body.lodge #lodgeBrowse { grid-column:2; }
+  body.lodge #lodgeNav { grid-column:1; grid-row:2; display:flex; flex-direction:column; gap:8px; padding:16px 8px; border-top:0; border-right:1px solid var(--border); }
+  body.lodge #lodgeNav button { min-height:72px; }
+  body.lodge main { grid-template-columns:minmax(0,1.3fr) minmax(340px,1fr)!important; grid-template-rows:minmax(0,1fr); max-width:1800px; }
+  body.lodge #chatPane { border-radius:0; border-top:0; border-left:1px solid var(--border); }
+  body.lodge[data-lodge-view=stage] main { grid-template-columns:minmax(0,2fr) minmax(320px,.8fr)!important; grid-template-rows:minmax(0,1fr); }
+}
+@media(max-height:620px) and (min-width:600px) and (max-width:999px) {
+  body.lodge { grid-template-rows:48px minmax(0,1fr) auto; }
+  body.lodge main,body.lodge.keyboard main,body.lodge[data-lodge-view=stage] main { grid-template-columns:minmax(100px,.8fr) minmax(210px,1fr)!important; grid-template-rows:minmax(0,1fr); }
+  #lodgeNav button { min-height:44px; flex-direction:row; gap:8px; padding:4px; }
+  body.lodge #chatPane { border-radius:0; }
+}
+@media(max-height:620px) and (max-width:599px) {
+  body.lodge { grid-template-rows:48px minmax(0,1fr) auto; }
+  body.lodge main,body.lodge.keyboard main,body.lodge[data-lodge-view=stage] main {
+    grid-template-columns:minmax(0,1fr)!important;
+    grid-template-rows:minmax(90px,.55fr) minmax(180px,1fr);
+  }
+  body.lodge #chatHead { min-height:44px; padding:2px 12px; }
+  body.lodge .lodge-chat-identity span { display:none; }
+  body.lodge #log { padding:8px 12px; }
+  body.lodge #composer { padding:6px 12px; }
+  body.lodge #input { max-height:80px; }
+  body.lodge #lodgeNav button { min-height:44px; padding:3px; }
+}
+
+body.lodge button.primary { box-shadow:none; }
+body.lodge .tile.kind-fleet .th button { display:none; }
+/* Stage is a dedicated workspace; the mounted chat retains its draft/history. */
+body.lodge[data-lodge-view=stage] main {
+  grid-template-columns:minmax(0,1fr)!important;
+  grid-template-rows:minmax(0,1fr)!important;
+}
+body.lodge[data-lodge-view=stage] #chatPane { display:none!important; }
+body.lodge .tile .th .close { display:none; }
+body.lodge .lodge-tile-close { display:none; }
+body.lodge[data-lodge-view=stage] .lodge-tile-close {
+  display:grid; place-items:center; position:absolute; top:8px; right:8px;
+  z-index:5; width:44px; height:44px; padding:0; border-radius:50%;
+  font-size:28px; line-height:1; color:var(--text); background:var(--panel);
+  border:1px solid var(--border); box-shadow:0 2px 10px #42392f18;
+}
+body.lodge[data-lodge-view=stage] .tile .th { padding-right:60px; }
+body.lodge .lodge-empty-stage { align-self:center; justify-self:center; text-align:center; padding:24px; }
+
+/* Atelier: paper, clay and warm ink. Keep remote documents in their own styles. */
+body.lodge { --display:Georgia,"Times New Roman",serif; }
+body.lodge::before,body.lodge::after { display:none!important; }
+body.lodge #stage { background:var(--bg); }
+body.lodge #stage::before { display:none; }
+body.lodge header { backdrop-filter:none; }
+body.lodge button { background:var(--panel); }
+body.lodge button:hover { transform:none; box-shadow:none; border-color:var(--accent); }
+body.lodge button.primary,body.lodge #btnSend { background:var(--accent); color:#fffdf8; border-color:transparent; }
+body.lodge #btnSend { border-radius:16px; box-shadow:none; }
+body.lodge .tile,body.lodge .tile.active { background:var(--panel); box-shadow:none; }
+body.lodge .tile.active { border-color:var(--accent); }
+body.lodge .tile .th { background:var(--panel); }
+body.lodge .tile .th .kind,body.lodge .tile .th .meta { font-family:var(--sans); }
+body.lodge .tile .tb,body.lodge .tile .off { background:var(--bg); }
+body.lodge .tile.kind-fleet .th .kind { display:none; }
+body.lodge .dot { box-shadow:none; animation:none; }
+body.lodge .dot::after { display:none; }
+body.lodge .lodge-chat-identity strong { font-family:var(--display); font-size:20px; font-weight:600; }
+body.lodge .lodge-dialog h2,body.lodge .lodge-browse-top h2,body.lodge .lodge-empty-stage h2 { font-family:var(--display); font-weight:600; }
+body.lodge .msg.user,body.lodge .msg.assistant .md { box-shadow:none; }
+body.lodge .msg.assistant .md { background:var(--panel); }
+body.lodge .md pre,body.lodge .md code,body.lodge .tool pre { background:var(--bg); color:var(--text); }
+body.lodge .tool,body.lodge .tool:has(.state.running),body.lodge .delegate,body.lodge .delegate.open { background:var(--panel); box-shadow:none; }
+body.lodge .tool .state.done,body.lodge .d-head .badge.done { color:var(--ok); }
+body.lodge .tool .state.running { color:var(--warn); }
+body.lodge .delegate .dlog,body.lodge .msg.dresult { background:var(--bg); }
+body.lodge .delegate .msg.user { background:var(--user); }
+body.lodge .tool .preview,body.lodge .tool pre,body.lodge .sys { color:var(--muted); }
+body.lodge .tool pre.term,body.lodge .tool pre.out { color:var(--text); }
+body.lodge .tool pre.out.err,body.lodge .tool .preview.err,body.lodge .tool pre.diff .del { color:var(--err); }
+body.lodge .tool pre.diff .add { color:var(--ok); }
+body.lodge .lodge-badge { color:var(--ok); }
+body.lodge .lodge-badge.offline { color:var(--muted); }
+body.lodge #toast { background:var(--panel); color:var(--text); border-color:var(--border); box-shadow:0 4px 18px #42392f18; }
+/* Preserve Fleet's constellation, relationships and activity; recolour only. */
+body.lodge .fleet-overview { --star:#75614f; background:radial-gradient(ellipse at 50% 48%,#eee5d7 0%,#f7f2e9 70%); color:var(--text); }
+body.lodge .fleet-overview .gx-scene { scrollbar-color:var(--border-strong) transparent; }
+body.lodge .fleet-overview .gx-sky text { fill:var(--text); stroke:var(--bg); }
+body.lodge .fleet-overview .gx-background > circle { fill:#968572; }
+body.lodge .fleet-overview radialGradient stop { stop-color:var(--accent); }
+body.lodge .fleet-overview .gx-orbit-guide { stroke:#968572; stroke-opacity:.23; }
+body.lodge .fleet-overview .gx-outer-guide { stroke-opacity:.28; }
+body.lodge .fleet-overview .gx-route { stroke:#89745f; }
+body.lodge .fleet-overview .gx-tether { stroke:#89745f; }
+body.lodge .fleet-overview .gx-route[data-state=working],
+body.lodge .fleet-overview .gx-tether[data-state=working],
+body.lodge .fleet-overview .gx-flow { stroke:var(--accent); }
+body.lodge .fleet-overview [data-state=available] { --star:#526b39; }
+body.lodge .fleet-overview [data-state=working] { --star:#9a4a32; }
+body.lodge .fleet-overview [data-state=starting],body.lodge .fleet-overview [data-state=queued] { --star:#78628a; }
+body.lodge .fleet-overview [data-state=waiting],body.lodge .fleet-overview [data-waiting=true] { --star:#476e82; }
+body.lodge .fleet-overview [data-state=stopped] { --star:#75614f; }
+body.lodge .fleet-overview [data-state=unreachable] { --star:#756b65; }
+body.lodge .fleet-overview .gx-hub-track { stroke:var(--accent); }
+body.lodge .fleet-overview .gx-core { fill:var(--accent); }
+body.lodge .fleet-overview .gx-hub-highlight { fill:#efb395; }
+body.lodge .fleet-overview .gx-planet-halo { fill:#89745f; }
+body.lodge .fleet-overview .gx-planet-ring { stroke:#89745f; }
+body.lodge .fleet-overview .gx-planet-shell { fill:#eee5d7; stroke:#89745f; }
+body.lodge .fleet-overview .gx-planet { fill:#89745f; }
+body.lodge .fleet-overview [data-state=stopped] .gx-star,
+body.lodge .fleet-overview .gx-hub[data-state=stopped] .gx-core { fill:var(--bg); stroke:#75614f; }
+body.lodge .fleet-overview .gx-hub[data-state=unreachable] .gx-core,
+body.lodge .fleet-overview .gx-hub[data-state=unreachable] .gx-hub-highlight { fill:#756b65; }
+body.lodge .fleet-overview .gx-hit { fill:var(--accent); }
+body.lodge .fleet-overview [role=button]:focus-visible > .gx-hit { stroke:var(--accent); }
+body.lodge .fleet-overview .gx-packet { stroke:var(--accent); }
+body.lodge .fleet-overview .gx-packet[data-kind=done] { stroke:var(--ok); }
+body.lodge .fleet-overview .gx-packet[data-kind=error] { stroke:var(--err); }
+body.lodge .fleet-overview .gx-inspector { background:var(--panel); border-color:var(--border-strong); box-shadow:0 12px 36px #42392f18; }
+body.lodge .fleet-overview .gx-inspector-status,
+body.lodge .fleet-overview .gx-inspector-agent small { color:var(--muted); }
+body.lodge .fleet-overview .gx-changed > .gx-core { animation-name:lodgeFleetCore; }
+@keyframes lodgeFleetCore { 20% { fill:#efb395; } }

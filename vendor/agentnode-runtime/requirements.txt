@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+websockets==17.1; python_version >= "3.11"
+websockets==16.1.1; python_version < "3.11"
+requests
+mss
+pillow
+pyautogui
+python-xlib; sys_platform == "linux"
+pyobjc-framework-Quartz; sys_platform == "darwin"

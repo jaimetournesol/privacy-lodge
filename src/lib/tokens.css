@@ -1,31 +1,32 @@
 /* ───────────────────────────────────────────────────────────────
-   Privacy Lodge design tokens — dark-first
+   Privacy Lodge design tokens — Atelier
    ─────────────────────────────────────────────────────────────── */
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 
   /* palette */
-  --bg: #16140f;
-  --surface: #211e17;
-  --surface-raised: #2a261d;
-  --text: #ece7dd;
-  --text-dim: #a89f8f;
-  --accent: #f2b705;
-  --accent-ink: #1a1a1a;
-  --ok: #4caf7a;
-  --warn: #e0a52e;
-  --err: #e06650;
+  --bg: #f7f2e9;
+  --surface: #fffdf8;
+  --surface-raised: #eee5d7;
+  --text: #42392f;
+  --text-dim: #75614f;
+  --accent: #9a4a32;
+  --accent-ink: #fffdf8;
+  --ok: #526b39;
+  --warn: #8a5b12;
+  --err: #b3261e;
 
   /* shape */
-  --radius: 12px;
-  --radius-sm: 8px;
-  --hairline: rgba(236, 231, 221, 0.1);
-  --hairline-strong: rgba(236, 231, 221, 0.18);
+  --radius: 20px;
+  --radius-sm: 12px;
+  --hairline: #e1d6c6;
+  --hairline-strong: #968572;
 
   /* type */
   --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
     Arial, sans-serif;
+  --font-display: Georgia, "Times New Roman", serif;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas,
     "Liberation Mono", monospace;
 
@@ -45,18 +46,6 @@
   --sp-5: 1.5rem;
   --sp-6: 2rem;
   --sp-7: 3rem;
-}
-
-/* light theme — for later */
-.theme-light {
-  color-scheme: light;
-  --bg: #faf7ef;
-  --surface: #ffffff;
-  --surface-raised: #f4efe4;
-  --text: #211e17;
-  --text-dim: #6e6757;
-  --hairline: rgba(33, 30, 23, 0.12);
-  --hairline-strong: rgba(33, 30, 23, 0.22);
 }
 
 /* ── base ─────────────────────────────────────────────────────── */
@@ -327,3 +316,11 @@ p {
     color: #000 !important;
   }
 }
+
+button, input, select { min-height:44px; }
+input { max-width:100%; }
+:focus-visible { outline:3px solid var(--accent); outline-offset:3px; }
+@media (prefers-reduced-motion:reduce) { *, *::before, *::after { animation:none!important; transition:none!important; } }
+
+/* Editorial headings; controls and long reading stay in the UI sans serif. */
+h1 { font-family:var(--font-display); font-weight:600; }

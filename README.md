@@ -24,13 +24,12 @@ Your box is your always-on private cloud. What it hosts today, and where it's go
 - **🚧 Social (planned)** — a Tor-only, self-hosted, federated alternative to the
   corporate timeline: post from your box, follow other boxes, and content flows
   box-to-box over Tor — no company, no algorithm, no clearnet.
-- **✅ Agents** — AI agents that run on your own box, reached over Tor like
-  everything else. Each gets its own account and its own end-to-end encrypted
-  chat, and a box can run several. Their control panel rides a *second* onion
-  behind tor v3 client authorisation, because it can run shell commands.
-  Optional add-on: `./pl-box agents on`, or choose it at install.
-- **🚧 Files (planned)** — the box is built to host apps; the phone becomes the
-  launcher for all of them.
+- **✅ Agents** — a Codex Conductor and an isolated Docker worker powered by
+  Agentnode. Chat while the Conductor presents, manage each machine's Stage,
+  and connect additional Agentnode machines. Each runtime uses its own Codex
+  device authorization. Enable with `./pl-box agents on`, or during setup.
+  Agentnode's upstream repository remains private; Lodge bundles a reviewed
+  runtime subset so builds do not need access to it.
 
 ## Run your box
 
@@ -102,13 +101,15 @@ the phone; the desktop window is just a status shell.
 nothing else to fetch:
 
 ```bash
-sudo apt install ./Privacy Lodge_*_amd64.deb     # or: sudo dnf install ./Privacy Lodge-*.rpm
+sudo apt install ./Privacy\ Lodge_0.2.0_amd64.deb
 privacy-lodge                                     # launch — setup opens in your browser
 ```
 (Or run the `.AppImage` directly, no install needed.)
 
 Once it's running, keep it current from **PP Config → Software update** on your phone: your
-box checks for a signed update over Tor and installs it only when you approve.
+box checks for signed updates over Tor. The 0.2.0 upgrade requires the complete
+installer because it adds runtime resources; executable-only updates are not offered
+for this release. Back up first and retain your existing data directory.
 
 <details><summary>Build from source instead (developers)</summary>
 
@@ -253,4 +254,4 @@ licences, with a written source offer for the AGPL ones, in
 | Social — Tor-only federated timeline (ActivityPub over onion) | 🚧 planned |
 | File storage / sync                     | 🚧 planned |
 | Agents (several per box, own account + E2EE room each) | ✅ working |
-| Cross-box agent mesh                    | 🚧 planned |
+| Agentnode Conductor and Docker worker   | ✅ Codex; additional machines connect through the fleet |

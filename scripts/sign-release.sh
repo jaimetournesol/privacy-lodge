@@ -6,7 +6,9 @@
 # (updater::UPDATE_PUBKEY_HEX). An unsigned or mis-signed manifest is refused, so this
 # script is the only way a release becomes installable.
 #
-#   ./scripts/sign-release.sh <version> <native-binary> [release-notes-file]
+#   ./scripts/sign-release.sh <version> <native-binary|--installer-only> [release-notes-file]
+# Use --installer-only when new sidecars/runtime resources require the complete
+# native installer. Such releases intentionally offer no executable-only update.
 #
 # e.g.  ./scripts/sign-release.sh 0.1.1 dist/privacy-lodge-0.1.1-linux-x86_64 notes.txt
 #
@@ -24,16 +26,19 @@ BINARY="${2:-}"
 NOTES_FILE="${3:-}"
 
 if [ -z "$VERSION" ] || [ -z "$BINARY" ]; then
-  echo "usage: $0 <version> <native-binary> [release-notes-file]" >&2; exit 2
+  echo "usage: $0 <version> <native-binary|--installer-only> [release-notes-file]" >&2; exit 2
 fi
-[ -f "$BINARY" ] || { echo "no such binary: $BINARY" >&2; exit 2; }
+[ "$BINARY" = --installer-only ] || [ -f "$BINARY" ] || { echo "no such binary: $BINARY" >&2; exit 2; }
 [ -f "$KEY" ] || { echo "signing key not found: $KEY" >&2
   echo "  (it lives in _special-project and is NEVER in this repo)" >&2; exit 2; }
 
 mkdir -p "$OUT"
-ASSET="$(basename "$BINARY")"
-SHA="$(sha256sum "$BINARY" | cut -d' ' -f1)"
-SIZE="$(stat -c%s "$BINARY")"
+ASSET=""; SHA=""; SIZE=0
+if [ "$BINARY" != --installer-only ]; then
+  ASSET="$(basename "$BINARY")"
+  SHA="$(sha256sum "$BINARY" | cut -d' ' -f1)"
+  SIZE="$(stat -c%s "$BINARY")"
+fi
 URL="https://github.com/$REPO/releases/download/v$VERSION/$ASSET"
 # The box keys native builds by "<os>-<arch>" (std::env::consts), e.g. linux-x86_64.
 TARGET="${PL_TARGET:-linux-x86_64}"
@@ -62,7 +67,7 @@ m = {
         "image": f"jaimemelon/privacy-lodge-box:{version}",
         "agent_image": f"jaimemelon/privacy-lodge-agent:{version}",
     },
-    "native": {target: {"url": url, "sha256": sha, "size": int(size)}},
+    "native": {target: {"url": url, "sha256": sha, "size": int(size)}} if sha else {},
 }
 # Compact + stable: the signature covers these EXACT bytes.
 with open(f"{out}/update.json", "w") as f:

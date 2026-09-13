@@ -11,3 +11,6 @@ vite.config.ts.timestamp-*
 dist/
 src-tauri/sidecars/*
 !src-tauri/sidecars/.gitkeep
+
+src-tauri/agentnode-runtime/
+src-tauri/agentnode-runtime.staging/

@@ -3,13 +3,19 @@
 
 mod account;
 mod agent;
+mod agentnode_runtime;
+mod agentnode_install;
 mod backup;
 mod commands;
+mod command_journal;
 mod config;
 pub mod crypto;
 mod envcompat; // pub: pl-crypt (backup-bundle encryption CLI) runs this exact code
 mod fedauth;
+mod identity_restore;
+mod identity_transaction;
 mod pairing;
+mod lifecycle;
 mod setup_server;
 mod state;
 mod supervisor;
@@ -30,9 +36,7 @@ pub fn run() {
             commands::get_status,
             commands::suggest_password,
             commands::begin_setup,
-            commands::get_recovery_kit,
-            commands::confirm_recovery_word,
-            commands::save_recovery_kit_html,
+            commands::save_identity_backup,
             commands::get_connect_qr,
             commands::stop_box,
             commands::start_box,
@@ -44,10 +48,27 @@ pub fn run() {
             commands::pair_accept,
             commands::pair_list,
             commands::pair_remove,
+            agentnode_runtime::agentnode_status,
+            agentnode_runtime::install_agentnode,
+            agentnode_runtime::open_conductor,
             commands::get_setup_url,
             commands::open_setup_page,
         ])
         .setup(|app| {
+            // Docker sends SIGTERM to PID 1. Convert it into the same drained
+            // exit path as the desktop Quit action instead of ignoring it.
+            #[cfg(unix)]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    use tokio::signal::unix::{signal, SignalKind};
+                    let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
+                    let mut interrupt = signal(SignalKind::interrupt()).expect("SIGINT handler");
+                    tokio::select! { _ = term.recv() => {}, _ = interrupt.recv() => {} }
+                    handle.exit(0);
+                });
+            }
+            agentnode_runtime::init(app.handle())?;
             state::load_persisted(app.handle());
             tray::init(app.handle())?;
             // First-run vs resume (appliance-UX feature A).
@@ -60,8 +81,8 @@ pub fn run() {
             //    the default browser; Docker (AUTOSTART, no creds) prints the URL from
             //    the entrypoint. Loopback-only; shuts itself down once the phone signs in.
             let autostart = crate::envcompat::var("AUTOSTART").ok().as_deref() == Some("1");
-            if state::read(app.handle(), |i| i.onion.is_some()) {
-                if autostart {
+            if state::read(app.handle(), |i| !i.box_name.is_empty()) {
+                if autostart && state::read(app.handle(), |i| i.phase != state::Phase::Error) {
                     supervisor::start_lifecycle(app.handle(), None);
                 }
             } else if let (Ok(user), Ok(pass)) = (
@@ -87,10 +108,23 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                // Graceful SIGTERM to sidecars; kill_on_drop(true) on each
-                // child is the SIGKILL backstop when the runtime tears down.
-                app.state::<supervisor::Supervisor>().shutdown();
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                use std::sync::atomic::Ordering;
+                let owner = app.state::<supervisor::Supervisor>();
+                if owner.exit_ready.load(Ordering::SeqCst) { return; }
+                api.prevent_exit();
+                if !owner.exit_requested.swap(true, Ordering::SeqCst) {
+                    let handle = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _stopped = supervisor::stop_lifecycle(&handle).await;
+                        let _agents = match agentnode_runtime::stop(false).await {
+                            Ok(guard) => guard,
+                            Err(error) => { eprintln!("[privacy-lodge] Could not stop owned agents: {error}"); None },
+                        };
+                        handle.state::<supervisor::Supervisor>().exit_ready.store(true, Ordering::SeqCst);
+                        handle.exit(code.unwrap_or(0));
+                    });
+                }
             }
         });
 }

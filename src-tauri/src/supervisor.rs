@@ -2,29 +2,18 @@
 //! Tauri's externalBin: binaries are resolved at runtime from
 //! `<app_data_dir>/bin/{tuwunel,tor}` or a `$PRIVACY_LODGE_BIN_DIR` override).
 //!
-//! Cancellation model — the "generation" trick:
-//! Every start/stop bumps an atomic generation counter. Each supervision
-//! loop captures the generation it was born under and checks it on every
-//! tick; the moment it goes stale (a stop or a newer start happened) the
-//! loop kills its child and exits. This means stop/start never has to track
-//! down task handles — old loops simply notice they are obsolete and die.
-//!
-//! Kill paths, in order of preference:
-//! 1. `shutdown()` sends a best-effort SIGTERM by pid (graceful: tor flushes
-//!    its state, tuwunel closes RocksDB cleanly).
-//! 2. Each loop calls `start_kill()` on its own child when it sees a stale
-//!    generation (covers the non-unix / pid-reuse edge).
-//! 3. `kill_on_drop(true)` is the backstop: if the tokio runtime is torn
-//!    down with children still alive (app exit), they get SIGKILLed.
+//! Each generation owns its startup, background work and child processes.
+//! Stop cancels work and waits for it to drop its resources. Child owners
+//! request graceful termination and reap the process before releasing their
+//! lease. Restart/reset/exit drain the old generation before proceeding.
 //!
 //! DEMO MODE: if the binaries are missing we simulate the exact same
 //! lifecycle with timers so the UI is fully drivable without binaries.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use rand::Rng; // [QW-rust b] gen_range for jittered respawn backoff
@@ -47,43 +36,26 @@ const TICK: Duration = Duration::from_millis(500);
 
 #[derive(Default)]
 pub struct Supervisor {
-    /// Bumped on every start/stop; stale loops self-terminate.
-    generation: AtomicU64,
-    /// Live child pids, for the graceful SIGTERM path on shutdown.
-    pids: Mutex<HashMap<&'static str, u32>>,
+    tasks: Arc<crate::lifecycle::LifecycleTasks>,
+    transition: tokio::sync::Mutex<()>,
+    requests: AtomicU64,
+    pub exit_requested: AtomicBool,
+    pub exit_ready: AtomicBool,
 }
 
 impl Supervisor {
     pub fn current_gen(&self) -> u64 {
-        self.generation.load(Ordering::SeqCst)
+        self.tasks.current()
     }
 
-    fn bump(&self) -> u64 {
-        self.generation.fetch_add(1, Ordering::SeqCst) + 1
-    }
-
-    fn record_pid(&self, name: &'static str, pid: u32) {
-        self.pids.lock().unwrap().insert(name, pid);
-    }
-
-    fn clear_pid(&self, name: &'static str) {
-        self.pids.lock().unwrap().remove(name);
-    }
-
-    /// Invalidate all supervision loops and SIGTERM live children.
-    /// Safe to call multiple times; also called on RunEvent::ExitRequested.
+    /// Request cancellation. Only drain completion proves processes stopped.
     pub fn shutdown(&self) {
-        self.bump();
-        let pids: Vec<u32> = self.pids.lock().unwrap().drain().map(|(_, pid)| pid).collect();
-        #[cfg(unix)]
-        for pid in pids {
-            // Graceful first; the per-loop start_kill + kill_on_drop are the
-            // harder backstops if the process ignores SIGTERM.
-            let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
-        }
-        #[cfg(not(unix))]
-        let _ = pids;
+        self.tasks.cancel();
     }
+}
+
+fn spawn_scoped(app: &AppHandle, gen: u64, work: impl std::future::Future<Output = ()> + Send + 'static) {
+    app.state::<Supervisor>().tasks.spawn(gen, work);
 }
 
 fn is_stale(app: &AppHandle, gen: u64) -> bool {
@@ -173,40 +145,68 @@ fn group_voice_present(app: &AppHandle) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Start (or restart) the box. Picks real or demo mode by binary presence.
-/// `admin_password` is `Some` only on first-run setup (it's used once to create
-/// the admin account, then dropped — never persisted); plain start/restart
-/// passes `None`.
+/// First-run setup supplies `admin_password`. An interrupted setup resumes
+/// account creation from the encrypted saved credential on a later start.
 pub fn start_lifecycle(app: &AppHandle, admin_password: Option<String>) {
-    let gen = app.state::<Supervisor>().bump();
-    let demo = !binaries_present(app);
-    state::update(app, |inner| {
-        inner.phase = Phase::SettingUp;
-        inner.setup_stage = Some(SetupStage::StartingServices);
-        inner.demo_mode = demo;
-        inner.homeserver = ServiceState::Starting;
-        inner.tor = ServiceState::Starting;
-    });
+    let request = app.state::<Supervisor>().requests.fetch_add(1, Ordering::SeqCst) + 1;
     let handle = app.clone();
-    if demo {
-        tauri::async_runtime::spawn(async move { run_demo(handle, gen).await });
-    } else {
-        tauri::async_runtime::spawn(async move {
+    tauri::async_runtime::spawn(async move {
+        let supervisor = handle.state::<Supervisor>();
+        let _transition = supervisor.transition.lock().await;
+        if supervisor.exit_requested.load(Ordering::SeqCst)
+            || supervisor.requests.load(Ordering::SeqCst) != request { return; }
+        // Even a queued first-setup request must not recreate an identity after reset.
+        if state::read(&handle, |inner| inner.box_name.is_empty()) { return; }
+        if state::read(&handle, |inner| inner.admin_password.is_empty() || inner.token.is_empty()
+            || inner.join_token.is_empty() || inner.turn_secret.is_empty()
+            || inner.livekit_api_key.is_empty() || inner.livekit_api_secret.is_empty()) {
+            state::update(&handle, |inner| {
+                inner.phase = Phase::Error;
+                inner.error = Some("Box credentials could not be loaded. Restore the correct storage key or an identity backup before starting.".into());
+            });
+            return;
+        }
+        let admin_password = admin_password.or_else(|| state::read(&handle, |inner|
+            (!inner.admin_created).then(|| inner.admin_password.clone())));
+        supervisor.shutdown();
+        supervisor.tasks.drain().await;
+        let gen = supervisor.current_gen();
+        let demo = !binaries_present(&handle);
+        state::update(&handle, |inner| {
+            inner.phase = Phase::SettingUp;
+            inner.error = None;
+            inner.setup_stage = Some(SetupStage::StartingServices);
+            inner.demo_mode = demo;
+            inner.homeserver = ServiceState::Starting;
+            inner.tor = ServiceState::Starting;
+        });
+        crate::agentnode_runtime::start_background(&handle);
+        let runner = handle.clone();
+        spawn_scoped(&handle, gen, async move {
+            let handle = runner;
+            if demo { run_demo(handle, gen).await; return; }
             if let Err(err) = run_real(handle.clone(), gen, admin_password).await {
                 if !is_stale(&handle, gen) {
                     eprintln!("[privacy-lodge] setup failed: {err}");
                     state::update(&handle, |inner| {
                         inner.phase = Phase::Error;
+                        inner.error = Some(err.clone());
                         inner.setup_stage = None;
                     });
+                    handle.state::<Supervisor>().shutdown();
                 }
             }
         });
-    }
+    });
 }
 
-/// Stop the box: invalidate loops, kill children, mark everything stopped.
-pub fn stop_lifecycle(app: &AppHandle) {
-    app.state::<Supervisor>().shutdown();
+/// Hold the returned guard through any destructive operation, excluding starts.
+pub async fn stop_lifecycle(app: &AppHandle) -> tokio::sync::MutexGuard<'_, ()> {
+    let supervisor = app.state::<Supervisor>().inner();
+    supervisor.requests.fetch_add(1, Ordering::SeqCst);
+    let transition = supervisor.transition.lock().await;
+    supervisor.shutdown();
+    supervisor.tasks.drain().await;
     state::update(app, |inner| {
         inner.phase = Phase::Stopped;
         inner.setup_stage = None;
@@ -214,6 +214,7 @@ pub fn stop_lifecycle(app: &AppHandle) {
         inner.tor = ServiceState::Stopped;
         inner.voice = ServiceState::Stopped;
     });
+    transition
 }
 
 /// Re-render the fed-proxy allowlist from the current pairings and hot-reload
@@ -289,6 +290,7 @@ async fn run_demo(app: AppHandle, gen: u64) {
     state::update(&app, |inner| {
         inner.onion = Some(DEMO_ONION.to_string());
         inner.setup_stage = Some(SetupStage::Ready);
+        inner.error = None;
         inner.phase = Phase::Running;
         inner.homeserver = ServiceState::Healthy;
         inner.tor = ServiceState::Healthy;
@@ -312,6 +314,7 @@ fn fail_real(app: &AppHandle, gen: u64, err: String) -> String {
     if !is_stale(app, gen) {
         state::update(app, |inner| {
             inner.phase = Phase::Error;
+                        inner.error = Some(err.clone());
             inner.setup_stage = None;
         });
         app.state::<Supervisor>().shutdown();
@@ -646,8 +649,22 @@ async fn run_real(app: AppHandle, gen: u64, admin_password: Option<String>) -> R
     if is_stale(&app, gen) {
         return Ok(());
     }
+    if state::read(&app, |inner| inner.restore_pairings_pending) {
+        let client = box_http_client();
+        let base = format!("http://127.0.0.1:{}", HOMESERVER_PORT + off());
+        let (username, password, onion) = state::read(&app, |inner|
+            (inner.username.clone(), inner.admin_password.clone(), inner.onion.clone().unwrap_or_default()));
+        let token = pair_login(&client, &base, &username, &password, "LODGE_RESTORE").await
+            .ok_or("Could not sign in to initialize restored pairings. Restart the box to retry.")?;
+        let peers = crate::pairing::onions(&paths.data_root);
+        crate::identity_restore::initialize_pairings(&client, &base, &format!("@{username}:{onion}"), &token, &peers).await?;
+        if is_stale(&app, gen) { return Ok(()); }
+        state::update(&app, |inner| inner.restore_pairings_pending = false);
+        state::persist(&app)?;
+    }
     state::update(&app, |inner| {
         inner.setup_stage = Some(SetupStage::Ready);
+        inner.error = None;
         inner.phase = Phase::Running;
     });
 
@@ -658,7 +675,7 @@ async fn run_real(app: AppHandle, gen: u64, admin_password: Option<String>) -> R
     // pairing step. Reads the local client API only; the onion came from a scanned
     // code, never from federation, so there's no allowlist bootstrap deadlock.
     let ph = app.clone();
-    tauri::async_runtime::spawn(async move { run_pairing_sync(ph, gen).await });
+    spawn_scoped(&app, gen, async move { run_pairing_sync(ph, gen).await });
 
     // Tier-2 invisible federation keepalive: tuwunel's federation sender is
     // event-driven — a `Failed` destination only retries when a NEW outbound
@@ -667,7 +684,7 @@ async fn run_real(app: AppHandle, gen: u64, admin_password: Option<String>) -> R
     // to-device EDU and wakes the sender so any stuck backlog flushes — with no
     // presence/read-receipt leak. See run_federation_keepalive below for detail.
     let fh = app.clone();
-    tauri::async_runtime::spawn(async move { run_federation_keepalive(fh, gen).await });
+    spawn_scoped(&app, gen, async move { run_federation_keepalive(fh, gen).await });
 
     // Tier-3 TRANSPORT federation keepalive: Tier-1 (backoff cap) and Tier-2 (m.dummy
     // nudge) both ride tuwunel's own federation path, so if the Tor CIRCUIT to a peer
@@ -677,21 +694,21 @@ async fn run_real(app: AppHandle, gen: u64, admin_password: Option<String>) -> R
     // circuit was manually re-warmed). This task keeps each paired peer's Tor circuit
     // warm directly, so messaging heals within a cadence of a call ending.
     let cw = app.clone();
-    tauri::async_runtime::spawn(async move { run_federation_circuit_warm(cw, gen).await });
+    spawn_scoped(&app, gen, async move { run_federation_circuit_warm(cw, gen).await });
 
     // Federation allowlist validator (review item W3-T1): Caddy forward_auths each
     // authenticated federation request to this loopback endpoint, which parses the
     // X-Matrix Authorization origin and matches it against the live pairings
     // allowlist — replacing the old substring-bypassable header_regexp matcher.
     let gh = app.clone();
-    tauri::async_runtime::spawn(async move { run_fedauth(gh, gen).await });
+    spawn_scoped(&app, gen, async move { run_fedauth(gh, gen).await });
 
     // Box config from the phone (appliance-UX feature B): publish a read-only status
     // blob the phone's PP Config app reads, and execute the tightly-guarded commands
     // the phone writes — all over the SAME authenticated account-data channel as
     // pairing (no new network surface). See run_box_config for the security rules.
     let bh = app.clone();
-    tauri::async_runtime::spawn(async move { run_box_config(bh, gen).await });
+    spawn_scoped(&app, gen, async move { run_box_config(bh, gen).await });
     Ok(())
 }
 
@@ -782,6 +799,7 @@ async fn pair_login(
     base: &str,
     user: &str,
     pass: &str,
+    device_id: &str,
 ) -> Option<String> {
     let r = client
         .post(format!("{base}/_matrix/client/v3/login"))
@@ -789,6 +807,8 @@ async fn pair_login(
             "type": "m.login.password",
             "identifier": { "type": "m.id.user", "user": user },
             "password": pass,
+            "device_id": device_id,
+            "initial_device_display_name": "Privacy Lodge service",
         }))
         .send()
         .await
@@ -892,7 +912,7 @@ pub(crate) async fn pair_remove_onion_from_account_data(
     let client = box_http_client(); // [QW-rust c] request timeout (no reqwest default)
 
     for _ in 0..5 {
-        let Some(token) = pair_login(&client, &base, &username, &password).await else {
+        let Some(token) = pair_login(&client, &base, &username, &password, "LODGE_PAIR_REMOVE").await else {
             sleep(Duration::from_secs(2)).await;
             continue;
         };
@@ -971,7 +991,7 @@ pub(crate) async fn pair_add_onion_to_account_data(
     let client = box_http_client(); // [QW-rust c] request timeout (no reqwest default)
 
     for _ in 0..attempts {
-        let Some(token) = pair_login(&client, &base, &username, &password).await else {
+        let Some(token) = pair_login(&client, &base, &username, &password, "LODGE_PAIR_ADD").await else {
             sleep(Duration::from_secs(2)).await;
             continue;
         };
@@ -1122,7 +1142,7 @@ async fn run_update_check(
                     crate::updater::RELEASES_PAGE
                 } else { "" },
                 // True when this box runs on an OS we don't publish a box for at all — the
-                // phone says "run your box under Docker instead", not "download an update".
+                // phone says "run Lodge under Docker instead", not "download an update".
                 "unsupported_os": !is_docker && !self_install,
                 // The release's images, straight from the SIGNED manifest, so a Docker owner
                 // (or PP Config) can see what `pl-box update <ver>` will land on. Optional on
@@ -1194,7 +1214,7 @@ async fn execute_update(
             // We build boxes for Linux only (the homeserver has no other target), so the
             // honest answer here is "move to Docker", not "go find a download".
             Err(format!(
-                "Privacy Lodge doesn't publish a box for {} — run your box under Docker instead: {}",
+                "Privacy Lodge doesn't publish a box for {} — run Lodge under Docker instead: {}",
                 crate::updater::native_target(),
                 crate::updater::docker_migrate_command()
             ))
@@ -1212,8 +1232,7 @@ async fn execute_update(
             let ver = m.version.clone();
             tauri::async_runtime::spawn(async move {
                 sleep(Duration::from_secs(3)).await;
-                stop_lifecycle(&app2);
-                sleep(Duration::from_secs(1)).await;
+                let stopped = stop_lifecycle(&app2).await;
                 let args: Vec<String> = std::env::args().skip(1).collect();
                 match std::process::Command::new(&path).args(&args).spawn() {
                     Ok(_) => {
@@ -1227,27 +1246,42 @@ async fn execute_update(
                             "[privacy-lodge] update: installed but couldn't restart into it ({e}) \
                              — quit and reopen Privacy Lodge to finish"
                         );
+                        drop(stopped);
                         start_lifecycle(&app2, None);
                     }
                 }
             });
-            Ok(format!("updated to {} — your box is restarting", m.version))
+            Ok(format!("updated to {} — Lodge is restarting", m.version))
         }
     }
 }
 
-fn execute_command(app: &AppHandle, action: &str) {
+async fn publish_command_outcome(
+    client: &reqwest::Client, ad_url: &impl Fn(&str) -> String, token: &str,
+    id: &str, outcome: &serde_json::Value,
+) -> bool {
+    let delivered = client.put(ad_url(&crate::command_journal::result_key(id))).bearer_auth(token)
+        .json(outcome).send().await.is_ok_and(|response| response.status().is_success());
+    if delivered {
+        let _ = client.put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE)).bearer_auth(token)
+            .json(outcome).send().await;
+    }
+    delivered
+}
+
+async fn execute_command(app: &AppHandle, action: &str) -> Result<(), String> {
     match action {
         "restart" => {
             eprintln!("[privacy-lodge] box config: restart requested by the phone");
-            stop_lifecycle(app);
+            drop(stop_lifecycle(app).await);
             start_lifecycle(app, None);
+            Ok(())
         }
         "reset" => {
             eprintln!("[privacy-lodge] box config: FACTORY RESET requested by the phone");
-            let _ = crate::commands::reset_box(app.clone());
+            crate::commands::reset_box(app.clone()).await
         }
-        _ => {}
+        _ => Err("Unsupported lifecycle command".into()),
     }
 }
 
@@ -1279,21 +1313,40 @@ async fn run_box_config(app: AppHandle, gen: u64) {
     let client = box_http_client();
     let version = env!("CARGO_PKG_VERSION");
     let mut token: Option<String> = None;
-    let mut handled: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let journal = match state::app_data_dir(&app) { Ok(dir) => dir.join("command-receipts.json"), Err(_) => return };
+    let mut handled = match crate::command_journal::handled(&journal, now_ms()) {
+        Ok(handled) => handled,
+        Err(error) => { eprintln!("[privacy-lodge] {error}"); return; }
+    };
     // Feature H: the last signature-VERIFIED manifest we offered the phone. An `update`
     // approval installs this and nothing else, so the phone can never point the box at an
     // arbitrary URL — it only ever says "yes" to what the box already verified.
     let mut offered: Option<crate::updater::Manifest> = None;
+    let (automatic_updates, mut completed_updates) =
+        tokio::sync::mpsc::unbounded_channel::<Option<crate::updater::Manifest>>();
     let mut last_update_check: u64 = 0;
 
     loop {
         if is_stale(&app, gen) {
             return;
         }
+        while let Ok(manifest) = completed_updates.try_recv() { offered = manifest; }
         if token.is_none() {
-            token = pair_login(&client, &base, &username, &password).await;
+            token = pair_login(&client, &base, &username, &password, "LODGE_CONFIG").await;
         }
         if let Some(t) = token.clone() {
+            let pending = match crate::command_journal::pending(&journal, now_ms()) {
+                Ok(pending) => pending,
+                Err(error) => { eprintln!("[privacy-lodge] Cannot read command outcomes: {error}"); return; }
+            };
+            for (id, outcome) in pending {
+                if is_stale(&app, gen) { return; }
+                if publish_command_outcome(&client, &ad_url, &t, &id, &outcome).await {
+                    if let Err(error) = crate::command_journal::published(&journal, &id, &outcome, now_ms()) {
+                        eprintln!("[privacy-lodge] Cannot acknowledge command outcome: {error}"); return;
+                    }
+                } else { break; }
+            }
             // 1) Publish read-only status for PP Config.
             let (hs, tor, voice, paired, box_name) = state::read(&app, |i| {
                 (i.homeserver, i.tor, i.voice, i.paired_count, i.box_name.clone())
@@ -1349,11 +1402,6 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                 }
             }
 
-            // Clear rooms that cannot be a live conversation — empty ones, and one-to-ones
-            // with a deleted agent. ONCE per box start, not every pass: it walks every room's
-            // member state, and nothing creates a dead room while the box is running (agent
-            // removal cleans up its own). Runs after the republish so the roster it checks
-            // against is current — otherwise a live agent could look unknown and lose its room.
             // Rename (0.2.0): carry every account-data blob forward from the legacy keys ONCE,
             // before the sweep and the update check below read the new keys.
             {
@@ -1363,25 +1411,6 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                     let n = migrate_account_data(&client, &ad_url, &t).await;
                     if n > 0 {
                         eprintln!("[privacy-lodge] rename: copied {n} account-data blob(s) to the new keys");
-                    }
-                }
-            }
-
-            {
-                use std::sync::atomic::{AtomicBool, Ordering};
-                static SWEPT: AtomicBool = AtomicBool::new(false);
-                if !SWEPT.swap(true, Ordering::Relaxed) {
-                    let n = crate::agent::cleanup_dead_rooms(
-                        &client,
-                        &base,
-                        &ad_url(crate::agent::AGENTS_ACCOUNT_DATA_TYPE),
-                        &t,
-                        &onion,
-                        &user_id,
-                    )
-                    .await;
-                    if n > 0 {
-                        eprintln!("[privacy-lodge] agents: cleared {n} dead room(s)");
                     }
                 }
             }
@@ -1398,14 +1427,44 @@ async fn run_box_config(app: AppHandle, gen: u64) {
             if auto_check && now_ms().saturating_sub(last_update_check) >= UPDATE_CHECK_INTERVAL_MS
             {
                 last_update_check = now_ms();
-                offered = run_update_check(&client, &ad_url(UPDATE_ACCOUNT_DATA_TYPE), &t, false).await.0;
+                // A cold/offline Tor circuit must not block local restart/reset
+                // commands behind an automatic release check. Its verified
+                // result returns to this owner before approval is evaluated.
+                let update_client = client.clone();
+                let update_url = ad_url(UPDATE_ACCOUNT_DATA_TYPE);
+                let update_token = t.clone();
+                let results = automatic_updates.clone();
+                spawn_scoped(&app, gen, async move {
+                    let (manifest, _) = run_update_check(&update_client, &update_url, &update_token, false).await;
+                    let _ = results.send(manifest);
+                });
             }
 
             // 2) Read + execute a guarded command.
             match get_account_data(&client, &ad_url(COMMAND_ACCOUNT_DATA_TYPE), &t).await {
                 Ok(Some(cmd)) => {
                     if let Some((id, action)) = validate_command(&cmd, &handled) {
+                        if is_stale(&app, gen) { return; }
+                        let expires = cmd.get("expires_ts").and_then(|value| value.as_u64()).unwrap_or(0);
+                        match crate::command_journal::claim(&journal, &id, expires, now_ms()) {
+                            Ok(true) => {}
+                            Ok(false) => { handled.insert(id); continue; }
+                            Err(error) => { eprintln!("[privacy-lodge] Command not executed: {error}"); continue; }
+                        }
                         handled.insert(id.clone());
+                        let cleared = client.put(ad_url(COMMAND_ACCOUNT_DATA_TYPE)).bearer_auth(&t)
+                            .json(&serde_json::json!({"id":id,"action":"done"})).send().await
+                            .is_ok_and(|response| response.status().is_success());
+                        if !cleared {
+                            let outcome = serde_json::json!({"id":id,"ok":false,"done":true,"done_ts":now_ms(),
+                                "error":"Could not clear the command safely. No action was taken."});
+                            if let Err(error) = crate::command_journal::finish(&journal,&id,&outcome,now_ms()) {
+                                eprintln!("[privacy-lodge] Cannot save command outcome: {error}"); return;
+                            }
+                            sleep(Duration::from_secs(4)).await;
+                            continue;
+                        }
+                        if is_stale(&app, gen) { return; }
                         if action == "backup" {
                             // Feature D. The command carries the user's backup passphrase, so
                             // take it into memory and CLEAR the command first — the passphrase
@@ -1415,12 +1474,6 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                                 .and_then(|p| p.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            let _ = client
-                                .put(ad_url(COMMAND_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&serde_json::json!({ "id": id, "action": "done" }))
-                                .send()
-                                .await;
                             let (ok, err) = match crate::backup::create(&app, &passphrase) {
                                 Ok(envelope) => {
                                     let put = client
@@ -1445,354 +1498,20 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                             if let Some(e) = err {
                                 res["error"] = serde_json::json!(e);
                             }
-                            let _ = client
-                                .put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&res)
-                                .send()
-                                .await;
+                            if let Err(error) = crate::command_journal::finish(&journal, &id, &res, now_ms()) {
+                                eprintln!("[privacy-lodge] Cannot save command outcome: {error}"); return;
+                            }
                             eprintln!("[privacy-lodge] box config: identity backup requested (ok={ok})");
-                        } else if action == "agent_setup" {
-                            // The owner may choose the WebUI password rather than live with
-                            // the one the container generated. It rides the command, exactly
-                            // as the backup passphrase does — read it into memory here so the
-                            // clear below takes it straight back out of account data.
-                            let webui_password = cmd
-                                .get("passphrase")
-                                .and_then(|p| p.as_str())
-                                .unwrap_or("")
-                                .trim()
-                                .to_string();
-                            // Empty = the first-run one-tap setup (or a password change).
-                            // Non-empty = "add another agent, called this".
-                            let field = |k: &str| {
-                                cmd.get(k)
-                                    .and_then(|p| p.as_str())
-                                    .unwrap_or("")
-                                    .trim()
-                                    .to_string()
-                            };
-                            let agent_name = field("agent_name");
-                            // The wizard's answers. The API key rides the command channel
-                            // exactly as the passphrase does, and the clear below takes it
-                            // straight back out of account data.
-                            let spec = crate::agent::AgentSpec {
-                                name: agent_name.clone(),
-                                provider: field("provider"),
-                                api_key: field("api_key"),
-                                base_url: field("base_url"),
-                                model: field("model"),
-                            };
-                            // Clear the command first (once-only), then provision. This can
-                            // take a while — registering an account and creating a room —
-                            // so publish an interim `done:false` progress line the phone
-                            // shows while it waits, then the real outcome.
-                            let _ = client
-                                .put(ad_url(COMMAND_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&serde_json::json!({ "id": id, "action": "done" }))
-                                .send()
-                                .await;
-                            let _ = client
-                                .put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&serde_json::json!({
-                                    "id": id, "done": false,
-                                    "message": if agent_name.is_empty() {
-                                        "Setting up your agent…".to_string()
-                                    } else {
-                                        format!("Setting up {agent_name}…")
-                                    },
-                                }))
-                                .send()
-                                .await;
-                            // Apply the owner's password BEFORE provisioning, so the roster we
-                            // publish at the end already carries the password the WebUI will
-                            // actually be using. The agent container watches this file and
-                            // brings its WebUI back up on the new secret.
-                            if !webui_password.is_empty() {
-                                match crate::agent::set_webui_password(&webui_password) {
-                                    Ok(()) => eprintln!(
-                                        "[privacy-lodge] agent WebUI password set by the owner"
-                                    ),
-                                    Err(e) => eprintln!(
-                                        "[privacy-lodge] couldn't set the agent WebUI password: {e}"
-                                    ),
-                                }
-                            }
-                            let join_token = state::read(&app, |i| i.join_token.clone());
-                            let res = crate::agent::setup(
-                                &client,
-                                &base,
-                                &ad_url(crate::agent::AGENTS_ACCOUNT_DATA_TYPE),
-                                &t,
-                                &onion,
-                                &join_token,
-                                &user_id,
-                                &spec,
-                            )
-                            .await;
-                            let (ok, mut msg) = match res {
-                                Ok(m) => (true, m),
-                                Err(e) => (false, e),
-                            };
-                            // On a box that already has agents, `setup` short-circuits with
-                            // "agents are already set up" — true, but not what the owner just
-                            // did. Report the password change they actually asked for.
-                            //
-                            // Only when no name was given: "add an agent called X" that
-                            // succeeds must report THAT, not a password change it didn't do.
-                            if ok && !webui_password.is_empty() && agent_name.is_empty() {
-                                msg = "Agent password updated.".to_string();
-                            }
-                            let mut out = serde_json::json!({
-                                "id": id, "ok": ok, "done": true, "done_ts": now_ms(),
-                            });
-                            // The phone shows `message` on success and `error` on failure,
-                            // so put the box's own wording in whichever it will read.
-                            if ok {
-                                out["message"] = serde_json::json!(msg);
-                            } else {
-                                out["error"] = serde_json::json!(msg);
-                            }
-                            let _ = client
-                                .put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&out)
-                                .send()
-                                .await;
-                            eprintln!("[privacy-lodge] agent setup requested by the phone (ok={ok}): {msg}");
-                        } else if action == "agent_remove" {
-                            // Destructive and near-irreversible, so the phone sends the exact
-                            // Matrix id of the row the owner tapped — never a display name.
-                            let target = cmd
-                                .get("agent_user")
-                                .and_then(|p| p.as_str())
-                                .unwrap_or("")
-                                .trim()
-                                .to_string();
-                            let _ = client
-                                .put(ad_url(COMMAND_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&serde_json::json!({ "id": id, "action": "done" }))
-                                .send()
-                                .await;
-                            let _ = client
-                                .put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&serde_json::json!({
-                                    "id": id, "done": false, "message": "Removing…",
-                                }))
-                                .send()
-                                .await;
-                            let res = crate::agent::remove(
-                                &client,
-                                &base,
-                                &ad_url(crate::agent::AGENTS_ACCOUNT_DATA_TYPE),
-                                &t,
-                                &user_id,
-                                &target,
-                            )
-                            .await;
-                            let (ok, msg) = match res {
-                                Ok(m) => (true, m),
-                                Err(e) => (false, e),
-                            };
-                            let mut out = serde_json::json!({
-                                "id": id, "ok": ok, "done": true, "done_ts": now_ms(),
-                            });
-                            if ok {
-                                out["message"] = serde_json::json!(msg);
-                            } else {
-                                out["error"] = serde_json::json!(msg);
-                            }
-                            let _ = client
-                                .put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&out)
-                                .send()
-                                .await;
-                            eprintln!("[privacy-lodge] agent remove requested (ok={ok}): {msg}");
-                        } else if action == "agent_session_new"
-                            || action == "agent_session_delete"
-                        {
-                            // Conversations within one agent. Cheap and non-destructive on the
-                            // way in; the delete half leaves and forgets ONE room and cannot
-                            // touch the agent itself, which is what agent_remove is for.
-                            let _ = client
-                                .put(ad_url(COMMAND_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&serde_json::json!({ "id": id, "action": "done" }))
-                                .send()
-                                .await;
-                            let sessions_url =
-                                ad_url(crate::agent::SESSIONS_ACCOUNT_DATA_TYPE);
-                            let res = if action == "agent_session_new" {
-                                crate::agent::session_new(
-                                    &client,
-                                    &base,
-                                    &sessions_url,
-                                    &t,
-                                    cmd.get("agent_user")
-                                        .and_then(|p| p.as_str())
-                                        .unwrap_or("")
-                                        .trim(),
-                                    cmd.get("agent_name")
-                                        .and_then(|p| p.as_str())
-                                        .unwrap_or("")
-                                        .trim(),
-                                )
-                                .await
-                                .map(|_room| "New conversation started.".to_string())
-                            } else {
-                                crate::agent::session_delete(
-                                    &client,
-                                    &base,
-                                    &ad_url(crate::agent::AGENTS_ACCOUNT_DATA_TYPE),
-                                    &sessions_url,
-                                    &t,
-                                    cmd.get("room_id")
-                                        .and_then(|p| p.as_str())
-                                        .unwrap_or("")
-                                        .trim(),
-                                )
-                                .await
-                            };
-                            let (ok, msg) = match res {
-                                Ok(m) => (true, m),
-                                Err(e) => (false, e),
-                            };
-                            let mut out = serde_json::json!({
-                                "id": id, "ok": ok, "done": true, "done_ts": now_ms(),
-                            });
-                            if ok {
-                                out["message"] = serde_json::json!(msg);
-                            } else {
-                                out["error"] = serde_json::json!(msg);
-                            }
-                            let _ = client
-                                .put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&out)
-                                .send()
-                                .await;
-                            eprintln!("[privacy-lodge] {action} (ok={ok}): {msg}");
-                        } else if action == "agent_auth" {
-                            // Device-code sign-in (Codex). Unlike every other command here this
-                            // one is not over when the box finishes its part: the owner has to
-                            // go and type a code at the provider. So this arm STAYS RESIDENT,
-                            // republishing progress under the same command id until the
-                            // container reaches a verdict — that's what lets the wizard show a
-                            // live code instead of a spinner with nothing behind it.
-                            let provider = cmd
-                                .get("provider")
-                                .and_then(|p| p.as_str())
-                                .unwrap_or("")
-                                .trim()
-                                .to_string();
-                            let _ = client
-                                .put(ad_url(COMMAND_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&serde_json::json!({ "id": id, "action": "done" }))
-                                .send()
-                                .await;
-                            let started = crate::agent::auth_start(&id, &provider);
-                            if let Err(e) = started {
-                                let _ = client
-                                    .put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE))
-                                    .bearer_auth(&t)
-                                    .json(&serde_json::json!({
-                                        "id": id, "ok": false, "done": true,
-                                        "done_ts": now_ms(), "error": e,
-                                    }))
-                                    .send()
-                                    .await;
-                            } else {
-                                let _ = client
-                                    .put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE))
-                                    .bearer_auth(&t)
-                                    .json(&serde_json::json!({
-                                        "id": id, "done": false,
-                                        "message": "Starting sign-in…",
-                                    }))
-                                    .send()
-                                    .await;
-                                // Bounded: the provider's code expires, and a wizard left
-                                // waiting forever is worse than one told the code went stale.
-                                // Every exit from this loop writes a terminal result.
-                                let deadline = now_ms() + 16 * 60 * 1000;
-                                let mut published_code = String::new();
-                                let mut terminal: Option<(bool, String)> = None;
-                                while now_ms() < deadline {
-                                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                                    match crate::agent::auth_progress(&id) {
-                                        Some(crate::agent::AuthProgress::Pending {
-                                            verification_uri,
-                                            user_code,
-                                        }) => {
-                                            // Publish once. The phone polls this key; rewriting
-                                            // an unchanged code every 2s is pure sync traffic
-                                            // over Tor for no new information.
-                                            if published_code != user_code {
-                                                published_code = user_code.clone();
-                                                let _ = client
-                                                    .put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE))
-                                                    .bearer_auth(&t)
-                                                    .json(&serde_json::json!({
-                                                        "id": id, "done": false,
-                                                        "message": "Waiting for you to sign in…",
-                                                        "verification_uri": verification_uri,
-                                                        "user_code": user_code,
-                                                    }))
-                                                    .send()
-                                                    .await;
-                                            }
-                                        }
-                                        Some(crate::agent::AuthProgress::Ok(m)) => {
-                                            terminal = Some((true, m));
-                                            break;
-                                        }
-                                        Some(crate::agent::AuthProgress::Failed(e)) => {
-                                            terminal = Some((false, e));
-                                            break;
-                                        }
-                                        // Started but no code yet, or the container hasn't
-                                        // answered at all — keep waiting.
-                                        Some(crate::agent::AuthProgress::Starting) | None => {}
-                                    }
-                                }
-                                let (ok, msg) = terminal.unwrap_or_else(|| {
-                                    // Timed out. Tell the container to stop polling too,
-                                    // otherwise it keeps a dead flow alive in the background.
-                                    let _ = crate::agent::auth_cancel(&id);
-                                    (false, "the sign-in code expired before it was used".into())
-                                });
-                                let mut out = serde_json::json!({
-                                    "id": id, "ok": ok, "done": true, "done_ts": now_ms(),
-                                });
-                                if ok {
-                                    out["message"] = serde_json::json!(msg);
-                                } else {
-                                    out["error"] = serde_json::json!(msg);
-                                }
-                                let _ = client
-                                    .put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE))
-                                    .bearer_auth(&t)
-                                    .json(&out)
-                                    .send()
-                                    .await;
-                                eprintln!("[privacy-lodge] agent auth {provider} (ok={ok}): {msg}");
+                        } else if action.starts_with("agent_") {
+                            let out = serde_json::json!({"id":id,"ok":false,"done":true,"done_ts":now_ms(),
+                                "error":"Agents now uses Agentnode. Open Agents to manage machines, conversations and Codex connections."});
+                            if let Err(error) = crate::command_journal::finish(&journal, &id, &out, now_ms()) {
+                                eprintln!("[privacy-lodge] Cannot save command outcome: {error}"); return;
                             }
                         } else if action == "check_update" || action == "update" {
                             // Feature H. Clear the command first (once-only), then do the work
                             // and report. Neither action is destructive to data, and `update`
                             // only ever installs a manifest we already signature-verified.
-                            let _ = client
-                                .put(ad_url(COMMAND_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&serde_json::json!({ "id": id, "action": "done" }))
-                                .send()
-                                .await;
                             let (ok, msg) = if action == "check_update" {
                                 let (found, err) =
                                     run_update_check(&client, &ad_url(UPDATE_ACCOUNT_DATA_TYPE), &t, true).await;
@@ -1803,9 +1522,10 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                                     // — that would tell the owner they're patched when we never
                                     // actually looked.
                                     (None, Some(e)) => (false, format!("couldn't check for updates: {e}")),
-                                    (None, None) => (true, "your box is up to date".to_string()),
+                                    (None, None) => (true, "Lodge is up to date".to_string()),
                                 }
                             } else {
+                                while let Ok(manifest) = completed_updates.try_recv() { offered = manifest; }
                                 let target = cmd
                                     .get("target_version")
                                     .and_then(|v| v.as_str())
@@ -1822,32 +1542,48 @@ async fn run_box_config(app: AppHandle, gen: u64) {
                             } else {
                                 res["error"] = serde_json::json!(msg);
                             }
-                            let _ = client
-                                .put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&res)
-                                .send()
-                                .await;
+                            if let Err(error) = crate::command_journal::finish(&journal, &id, &res, now_ms()) {
+                                eprintln!("[privacy-lodge] Cannot save command outcome: {error}"); return;
+                            }
                             eprintln!("[privacy-lodge] box config: {action} (ok={ok}) — {msg}");
                         } else {
-                            // Ack first (a destructive action tears the box down), then clear
-                            // the command to a no-op so it can never re-fire, THEN execute.
-                            let _ = client
-                                .put(ad_url(COMMAND_RESULT_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&serde_json::json!({ "id": id, "ok": true, "done_ts": now_ms() }))
-                                .send()
-                                .await;
-                            let _ = client
-                                .put(ad_url(COMMAND_ACCOUNT_DATA_TYPE))
-                                .bearer_auth(&t)
-                                .json(&serde_json::json!({ "id": id, "action": "done" }))
-                                .send()
-                                .await;
-                            execute_command(&app, &action);
-                            // restart bumps the generation / reset wipes the box → this loop
-                            // exits via is_stale on the next tick.
+                            // This is acceptance, not proof that deletion or restart completed.
+                            // Never tear the server down unless it stored the acknowledgement.
+                            let accepted = serde_json::json!({"id":id,"ok":true,"done":true,
+                                "phase":"accepted","done_ts":now_ms(),
+                                "message":if action=="reset" { "Lodge accepted the reset request." } else { "Lodge accepted the restart request." }});
+                            if let Err(error) = crate::command_journal::finish(&journal,&id,&accepted,now_ms()) {
+                                eprintln!("[privacy-lodge] Cannot save command acceptance: {error}"); return;
+                            }
+                            if publish_command_outcome(&client,&ad_url,&t,&id,&accepted).await {
+                                let _ = crate::command_journal::published(&journal,&id,&accepted,now_ms());
+                                if is_stale(&app, gen) { return; }
+                                // Dispatch outside this generation: reset/stop must not
+                                // wait for the command listener that is awaiting itself.
+                                let mut dispatched = accepted.clone();
+                                dispatched["phase"] = serde_json::json!("dispatched");
+                                dispatched["done_ts"] = serde_json::json!(now_ms());
+                                crate::command_journal::finish(&journal,&id,&dispatched,now_ms()).ok();
+                                let command_app = app.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    if let Err(error) = execute_command(&command_app,&action).await {
+                                        eprintln!("[privacy-lodge] lifecycle command failed: {error}");
+                                        // Do not recreate a journal inside an erased identity.
+                                    }
+                                });
+                                return;
+                            } else {
+                                let failure = serde_json::json!({"id":id,"ok":false,"done":true,"done_ts":now_ms(),
+                                    "error":"The box could not publish its acknowledgement. No action was taken."});
+                                if let Err(error) = crate::command_journal::finish(&journal,&id,&failure,now_ms()) {
+                                    eprintln!("[privacy-lodge] Cannot save command outcome: {error}"); return;
+                                }
+                            }
                         }
+                    } else if cmd.get("id").and_then(|v| v.as_str()).is_some_and(|id| handled.contains(id))
+                        && cmd.get("action").and_then(|v| v.as_str()) != Some("done") {
+                        let _ = client.put(ad_url(COMMAND_ACCOUNT_DATA_TYPE)).bearer_auth(&t)
+                            .json(&serde_json::json!({"id":cmd["id"],"action":"done"})).send().await;
                     }
                 }
                 Ok(None) => {}
@@ -1898,7 +1634,7 @@ async fn run_fedauth(app: AppHandle, gen: u64) {
             res = listener.accept() => {
                 if let Ok((mut sock, _)) = res {
                     let dir = paths.data_root.clone();
-                    tauri::async_runtime::spawn(async move {
+                    spawn_scoped(&app, gen, async move {
                         crate::fedauth::handle_conn(&mut sock, &dir).await;
                     });
                 }
@@ -1929,7 +1665,7 @@ async fn run_pairing_sync(app: AppHandle, gen: u64) {
             return;
         }
         if token.is_none() {
-            token = pair_login(&client, &base, &username, &password).await;
+            token = pair_login(&client, &base, &username, &password, "LODGE_PAIR_SYNC").await;
         }
         if let Some(t) = token.clone() {
             match pair_fetch_onions(&client, &base, &user_id, &t).await {
@@ -1959,7 +1695,7 @@ async fn run_pairing_sync(app: AppHandle, gen: u64) {
                             // full cold-circuit cost (which stalled first-time pairing for
                             // minutes in testing). Fire-and-forget.
                             let peer = o.clone();
-                            tauri::async_runtime::spawn(async move { warm_peer_circuit(&peer, true).await });
+                            spawn_scoped(&app, gen, async move { warm_peer_circuit(&peer, true).await });
                         }
                     }
 
@@ -2053,7 +1789,7 @@ async fn run_federation_circuit_warm(app: AppHandle, gen: u64) {
             let p = p.clone();
             // Fire-and-forget + quiet (no per-tick log spam) — a cold/offline peer just
             // fails and the next tick retries.
-            tauri::async_runtime::spawn(async move { warm_peer_circuit(&p, false).await });
+            spawn_scoped(&app, gen, async move { warm_peer_circuit(&p, false).await });
         }
         // Rare heartbeat (~every 5 min) so the log shows the loop is alive, never per-peer.
         ticks += 1;
@@ -2098,9 +1834,8 @@ async fn run_federation_keepalive(app: AppHandle, gen: u64) {
     let base = format!("http://127.0.0.1:{}", HOMESERVER_PORT + off());
     let client = box_http_client(); // [QW-rust c] request timeout (no reqwest default)
     let mut token: Option<String> = None;
-    // Monotonic transaction-id counter — a unique txn id per send guarantees the
-    // PUT is treated as a new request (not a dedup retry) without any reliance on
-    // wall-clock/random uniqueness.
+    // The counter is diagnostic only: keepalive_tick adds fresh randomness because
+    // Matrix deduplicates transaction IDs across logins using the same device.
     let mut txn: u64 = 0;
 
     loop {
@@ -2111,7 +1846,7 @@ async fn run_federation_keepalive(app: AppHandle, gen: u64) {
         // Cache the admin token; re-login on None (first tick, or after a prior
         // request error cleared it). Mirrors run_pairing_sync.
         if token.is_none() {
-            token = pair_login(&client, &base, &username, &password).await;
+            token = pair_login(&client, &base, &username, &password, "LODGE_KEEPALIVE").await;
         }
         let Some(t) = token.clone() else {
             sleep(Duration::from_secs(30)).await;
@@ -2186,6 +1921,7 @@ async fn keepalive_tick(
         .send()
         .await
         .map_err(|_| ())?;
+    if !r.status().is_success() { return Err(()); }
     let v: serde_json::Value = r.json().await.map_err(|_| ())?;
     let rooms: Vec<String> = v
         .get("joined_rooms")
@@ -2233,7 +1969,7 @@ async fn keepalive_tick(
     let mut nudged = 0usize;
     for peer in &peers {
         *txn += 1;
-        let url = format!("{base}/_matrix/client/v3/sendToDevice/m.dummy/{txn}");
+        let url = format!("{base}/_matrix/client/v3/sendToDevice/m.dummy/lodge-{:032x}-{txn}", rand::random::<u128>());
         match client
             .put(url)
             .bearer_auth(token)
@@ -2281,6 +2017,7 @@ async fn wait_for_http(
     timeout: Duration,
 ) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
+    let mut reported_slow = false;
     loop {
         if is_stale(app, gen) {
             return Err("cancelled".into());
@@ -2288,8 +2025,11 @@ async fn wait_for_http(
         if http_versions_ok(port).await {
             return Ok(());
         }
-        if Instant::now() >= deadline {
-            return Err("homeserver didn't come up in time".into());
+        if Instant::now() >= deadline && !reported_slow {
+            reported_slow = true;
+            state::update(app, |inner| {
+                inner.error = Some("The homeserver is still starting. A database upgrade can take longer; please keep Lodge running.".into());
+            });
         }
         sleep(TICK).await;
     }
@@ -2376,7 +2116,9 @@ fn spawn_supervised(
     envs: Vec<(String, String)>,
     readiness: Readiness,
 ) {
+    let Some(lease) = app.state::<Supervisor>().tasks.register(gen) else { return; };
     tauri::async_runtime::spawn(async move {
+        let _lease = lease;
         let mut backoff = BACKOFF_START;
         loop {
             if is_stale(&app, gen) {
@@ -2395,8 +2137,8 @@ fn spawn_supervised(
                 .stdin(Stdio::null())
                 .stdout(out)
                 .stderr(err)
-                // Backstop: SIGKILL if the runtime drops us with the child alive.
-                .kill_on_drop(true);
+                // A database migration must never be force-killed on task drop.
+                .kill_on_drop(name != "homeserver");
 
             let mut child = match cmd.spawn() {
                 Ok(child) => child,
@@ -2408,9 +2150,6 @@ fn spawn_supervised(
                     continue;
                 }
             };
-            if let Some(pid) = child.id() {
-                app.state::<Supervisor>().record_pid(name, pid);
-            }
 
             // Poll loop: watches for child exit, stale generation, and
             // readiness — all on one tick so we never hold the Child across
@@ -2418,9 +2157,16 @@ fn spawn_supervised(
             let mut healthy = false;
             let exited_cleanly_cancelled = loop {
                 if is_stale(&app, gen) {
-                    let _ = child.start_kill();
-                    let _ = child.wait().await; // reap, no zombie
-                    break true;
+                    // Keep ownership until reaped. A failed signal/wait is retried;
+                    // it must never let reset delete a still-running database.
+                    match crate::lifecycle::stop_child(&mut child, name == "homeserver").await {
+                        Ok(()) => break true,
+                        Err(error) => {
+                            eprintln!("[privacy-lodge] waiting for {name} shutdown: {error}");
+                            sleep(TICK).await;
+                            continue;
+                        }
+                    }
                 }
                 match child.try_wait() {
                     Ok(Some(status)) => {
@@ -2437,11 +2183,11 @@ fn spawn_supervised(
                     }
                     Err(err) => {
                         eprintln!("[privacy-lodge] {name} wait error: {err}");
-                        break false;
+                        sleep(TICK).await;
+                        continue;
                     }
                 }
             };
-            app.state::<Supervisor>().clear_pid(name);
 
             if exited_cleanly_cancelled || is_stale(&app, gen) {
                 return;
@@ -2463,6 +2209,81 @@ mod tests {
     use super::validate_command;
     use serde_json::json;
     use std::collections::HashSet;
+
+    #[tokio::test]
+    async fn keepalive_after_restart_uses_new_transaction_ids() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut transactions = Vec::new();
+            for _ in 0..6 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                loop {
+                    let mut chunk = [0;4096]; let n = socket.read(&mut chunk).await.unwrap();
+                    assert!(n > 0); bytes.extend_from_slice(&chunk[..n]);
+                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let headers = String::from_utf8_lossy(&bytes[..end]);
+                        let length = headers.lines().find_map(|line| line.to_lowercase().strip_prefix("content-length:").and_then(|value| value.trim().parse::<usize>().ok())).unwrap_or(0);
+                        if bytes.len() >= end+4+length { break; }
+                    }
+                }
+                let request = String::from_utf8(bytes).unwrap();
+                let path = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                let body = if path.ends_with("/joined_rooms") { json!({"joined_rooms":["!fixture:ours"]}) }
+                    else if path.ends_with("/joined_members") { json!({"joined":{"@bob:peer.onion":{}}}) }
+                    else { assert!(path.contains("/sendToDevice/m.dummy/")); transactions.push(path.to_owned()); json!({}) };
+                let body = body.to_string();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+            }
+            transactions
+        });
+        let client = reqwest::Client::builder().no_proxy().timeout(std::time::Duration::from_secs(2)).build().unwrap();
+        let desired = HashSet::from(["peer.onion".to_owned()]);
+        for _ in 0..2 {
+            let mut counter_after_restart = 0;
+            assert_eq!(super::keepalive_tick(&client,&format!("http://{address}"),"fixture-token","ours",&desired,&mut counter_after_restart).await,Ok(1));
+        }
+        let transactions = server.await.unwrap();
+        assert_eq!(transactions.len(),2); assert_ne!(transactions[0],transactions[1]);
+    }
+
+    #[tokio::test]
+    async fn result_publication_requires_per_command_success() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            let count = socket.read(&mut request).await.unwrap();
+            assert!(String::from_utf8_lossy(&request[..count]).starts_with(&format!("PUT /{} ", crate::command_journal::result_key("fixture"))));
+            socket.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        });
+        let url = |key: &str| format!("http://{address}/{key}");
+        let client = reqwest::Client::builder().no_proxy().timeout(std::time::Duration::from_secs(2)).build().unwrap();
+        assert!(!super::publish_command_outcome(&client,&url,"fixture-token","fixture",&json!({"id":"fixture","ok":true})).await);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn result_publication_keeps_new_clients_independent_of_legacy_key() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for code in ["200 OK", "503 Service Unavailable"] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0;4096]; socket.read(&mut request).await.unwrap();
+                socket.write_all(format!("HTTP/1.1 {code}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").as_bytes()).await.unwrap();
+            }
+        });
+        let url = |key: &str| format!("http://{address}/{key}");
+        let client = reqwest::Client::builder().no_proxy().timeout(std::time::Duration::from_secs(2)).build().unwrap();
+        assert!(super::publish_command_outcome(&client,&url,"fixture-token","fixture",&json!({"id":"fixture","ok":true})).await);
+        server.await.unwrap();
+    }
 
     fn fresh_expiry() -> u64 {
         super::now_ms() + 60_000 // one minute out: comfortably inside the 5-minute window

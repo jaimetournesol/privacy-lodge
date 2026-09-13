@@ -386,6 +386,9 @@ fn torrc_string(
         port = AGENT_WEBUI_ONION_PORT,
         target = AGENT_WEBUI_PORT + o,
     );
+    for slot in 0..=16 {
+        let _ = writeln!(torrc, "HiddenServicePort {} 127.0.0.1:{}", 8789 + slot, 4400 + slot + o);
+    }
     torrc
 }
 
@@ -709,6 +712,8 @@ fn caddyfile_string(
                  \tbind 127.0.0.1\n\
                  \ttls {cert} {key}\n\
                  \troot * {root}\n\
+                 \t@ec_room path /room /room/*\n\
+                 \trewrite @ec_room /index.html\n\
                  \tfile_server\n\
                  }}\n",
                 ec_port = CADDY_EC_PORT + off(),
@@ -910,7 +915,10 @@ mod tests {
         let torrc = torrc_string(9150, "/d", "/d/hs", 8118, 8449, false, "/d/hs-agent");
         let lines = torrc.matches("HiddenServicePort").count();
         // 8448 + 8008 + 80 + 3478 + 5349 fixed, the agent WebUI, plus one per relay port.
-        assert_eq!(lines, 6 + relay_count());
+        assert_eq!(lines, 23 + relay_count());
+        let agent_service = torrc.split("HiddenServiceDir /d/hs-agent").nth(1).unwrap();
+        assert!(agent_service.contains("HiddenServicePort 8789 127.0.0.1:4400"));
+        assert!(agent_service.contains("HiddenServicePort 8790 127.0.0.1:4401"));
         // The agent WebUI is mapped on its OWN hidden service, never on the main onion —
         // that address is shared with every paired peer box, and this port fronts an agent
         // control plane that can run shell commands.
@@ -991,6 +999,12 @@ mod tests {
         let with = caddyfile_string(8449, 8118, "/c.pem", "/k.pem", &[], true, Some("/opt/ec"));
         assert!(with.contains(&format!("https://:{} {{", CADDY_EC_PORT + off())));
         assert!(with.contains("root * /opt/ec"));
+        // Bolt opens /room/#…; that client-side route has no corresponding file.
+        assert!(with.contains("@ec_room path /room /room/*"));
+        assert!(with.contains("rewrite @ec_room /index.html"));
+        // Missing config.json must remain 404 so Element Call uses its defaults;
+        // a blanket SPA fallback returns HTML and breaks JSON initialization.
+        assert!(!with.contains("try_files"));
         assert!(with.contains("file_server"));
         // Loopback-only like every other site (security review): tor reaches it, the LAN can't.
         assert_eq!(with.matches("bind 127.0.0.1").count(), 5);

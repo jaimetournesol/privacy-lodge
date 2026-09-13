@@ -45,9 +45,12 @@ fi
 # The container owns its data dir. Named volumes are already root-owned (no-op); this fixes
 # a bind-mount from a host user — tor refuses a hidden-service dir it doesn't own (exit 1).
 chown -R "$(id -u):$(id -g)" /data 2>/dev/null || true
-# Stable secrets key so secrets.json (AES-GCM) decrypts across restarts. Provide your own
-# in production; the fallback keeps a single container reproducible but is NOT secret.
-PL_SECRETS_KEY="${PL_SECRETS_KEY:-pureprivacy-docker-default-key-change-me=}"
+# The launcher generates and retains this outside the data volume. Never silently
+# start a box with the historical public fallback key.
+if [ -z "$PL_SECRETS_KEY" ]; then
+  echo "[entrypoint] PL_SECRETS_KEY is required: set it to base64 of 32 random bytes and keep it with your backup credentials." >&2
+  exit 1
+fi
 
 # Virtual X display (the GUI renders here, unseen) + a session D-Bus webkit needs.
 # `docker restart` reuses the container FS, so clear any stale X lock first — otherwise

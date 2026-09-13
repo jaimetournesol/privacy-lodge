@@ -1,0 +1,20 @@
+{
+  "dompurify": {
+    "version": "3.4.15",
+    "url": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.15.tgz",
+    "integrity": "sha512-EUBjM+B+lkDE41iE82DDSCfkoPGfXx8IxFxPMjNzm/Uk4xDet77rTN9wqlxlVg71kK7XGuUMv6wUxJUwwv+Xyw==",
+    "files": {
+      "purify.min.js": "f263b05369e050fa175d4ecb9c9358eb4253602d510297adfb31df48b2f1c4d5",
+      "DOMPurify-LICENSE": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    }
+  },
+  "marked": {
+    "version": "12.0.2",
+    "url": "https://registry.npmjs.org/marked/-/marked-12.0.2.tgz",
+    "integrity": "sha512-qXUm7e/YKFoqFPYPa3Ukg9xlI5cyAtGmyEIzMfW//m6kXwCy2Ps9DYf5ioijFKQ8qyuscrHoY04iJGctu2Kg0Q==",
+    "files": {
+      "marked.js": "27ade2eccd4d58ab5edeb4f046eae71f204979547c4575fa11e294332d30a291",
+      "Marked-LICENSE.md": "8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c"
+    }
+  }
+}

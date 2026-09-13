@@ -34,9 +34,9 @@
   <Wordmark size="lg" />
 
   {#if settingUp}
-    <h1>Setting up your box…</h1>
+    <h1>Setting up Lodge…</h1>
     <p class="lead">
-      Your box is coming up now. Go back to the <strong>setup tab in your browser</strong> —
+      Lodge is coming up now. Go back to the <strong>setup tab in your browser</strong> —
       when it’s ready it’ll show a QR code to scan with the Privacy Lodge app on your phone.
     </p>
   {:else}
