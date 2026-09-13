@@ -64,6 +64,9 @@ jobs:
       - name: Restore archive safety checks
         run: python3 -m unittest discover -s docker -p 'test_*.py'
 
+      - name: Stage reviewed Agentnode runtime
+        run: pnpm stage:agentnode
+
       # frontend must be built first: tauri's generate_context! embeds ../build
       - name: cargo check
         working-directory: src-tauri
