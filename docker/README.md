@@ -80,7 +80,7 @@ down the moment your phone connects** — setup is one-time.
 | `./pl-box down` | Stop the box — identity is kept in the volume. |
 | `./pl-box update [<version>]` | Update, keeping identity. Docker-Hub install: pull `<version>` (or refresh the current tag), pin it in `.env`, recreate — the box's own update check hands you this command with the version filled in. Source install: rebuild the image + recreate. |
 | `./pl-box backup [dir] [--encrypt]` | Bundle the box **and** the agents add-on (onion key, secrets, pairings, agent profiles + keys) → `backups/`. **Do this.** `--encrypt` seals it with a passphrase (AES-256-GCM) — without the passphrase the file is noise, to you too. |
-| `./pl-box restore <file>` | Restore a backup into the volume (stop the box first). Old bare-tar backups and `.enc` bundles both work. |
+| `./pl-box restore <file>` | Restore into fresh volumes and select them after validation (stop the box first); previous volumes are kept. Old bare-tar backups and `.enc` bundles both work. |
 | `./pl-box shell` | Open a shell inside the container. |
 | `./pl-box destroy` | Remove the box **and** its volume (asks you to type the box name). |
 
@@ -119,38 +119,28 @@ for it — `./pl-box agents on`, or choose it when the installer offers.
 ./pl-box agents off       # remove the container; the data volume is kept
 ```
 
-Each agent gets its own Matrix account on your box and its own end-to-end encrypted room,
-and one box can run several — add them with **+** in the phone's Agents app. The box
-provisions the account; the agent container runs the model. They meet at a private
-handoff volume, so access tokens never travel through anything the phone can read.
+The add-on runs a Codex Conductor and a separate Docker worker. Each has its own
+private state volume and Codex device authorization. Open Agents in Privacy Bolt to
+sign in, chat with Conductor beside its presentation, manage machine stages, or
+connect another Agentnode machine. Stage close buttons close that local view;
+they do not stop an agent's work.
 
-**Its control panel rides a second onion.** The panel can run shell commands, and your
-box's main onion is known to every paired peer — so it is published on a *separate*
-hidden service protected by **tor v3 client authorisation**: without the key your phone
-holds, the service cannot even be looked up. That gate sits below HTTP, so learning the
-address gains an attacker nothing. This is only possible because it's a separate service —
-client auth is per-service, and enabling it on the main onion would break federation.
-There is a password on top of that, which you choose.
+The browser control panel uses a separate onion with Tor client authorization and
+an authenticated browser session. The worker has no host Docker socket. The host
+owns container installation, and agent processes run unprivileged inside them.
+The runtime provides Python, Node and Codex; create project virtual environments
+inside the allocated workspace rather than changing `/opt/venv`.
 
-**The agent has a real toolchain.** It can compile things, build from source and run node —
-gcc/g++/make/cmake, the usual `-dev` headers, node + npm, plus `jq`, `sqlite3`, `psql`,
-`rsync`, `ssh`, `shellcheck`, `pdftotext`, ImageMagick, `ps`/`free`, `fd`, `bat`. That is
-about 1.2 GB of the image; build with `--build-arg PL_DEV_TOOLS=0` for a lean box that only
-relays chat.
+`pl-box backup` includes Conductor, worker, peer and handoff volumes, including
+provider sign-in state. Protect or encrypt backups accordingly. Restore validates
+all archives before extracting into fresh volumes, then selects the restored
+identity atomically. It retains the previous volumes and configuration.
 
-One rule when working in there: **`python` and `pip` are the agent's own runtime**
-(`/opt/hermes/venv`, first on `PATH`), so installing into them can take the agent down
-mid-conversation. Run `mkvenv <name>` instead — it creates a scratch venv under the
-workspace volume (so it survives container recreates) with its own `pip`.
-
-Two things worth knowing before you rely on it:
-
-- **`pl-box backup` covers the agents too** (since bundle format 2): the agents' data
-  volume — profiles, memories, skills, **model API keys** — and the credential handoff
-  volume ride in the same bundle and come back with `restore`. Older single-volume backups
-  never held them; take a fresh backup once agents are set up.
-- **Agents can't be deleted yet.** They can be added from the app; removing one is manual
-  and leaves its Matrix account behind, so that name can't be reused.
+For an upgrade to 0.2.0, preserve `.env`, update these helper and Compose files, and
+run `./pl-box update 0.2.0`. Legacy agent data is retained, but legacy sessions are
+not converted into Agentnode sessions. Both public images use the `0.2.0` tag.
+The Agentnode repository remains private: only the reviewed runtime subset is
+included in Lodge's public source and runtime image.
 
 ## Back up your box — it's the whole identity
 

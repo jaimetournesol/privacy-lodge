@@ -6,35 +6,36 @@
 <title>Set up Privacy Lodge</title>
 <style>
   :root{
-    --ink:#16140F; --ink-soft:#1D1A12; --ink-card:#221F17;
-    --paper:#ECE6D7; --paper-dim:#9A9384; --sun:#F2B705; --sun-dim:#B8860B;
-    --danger:#E06650; --ok:#4CAF7A;
+    color-scheme:light;
+    --ink:#F7F2E9; --ink-soft:#FFFDF8; --ink-card:#EEE5D7;
+    --paper:#42392F; --paper-dim:#75614F; --sun:#9A4A32; --sun-dim:#895339;
+    --danger:#B3261E; --ok:#526B39;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--ink);color:var(--paper);
     font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
     min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-  .card{width:100%;max-width:460px;background:var(--ink-soft);border:1px solid #2a271d;
-    border-radius:20px;padding:34px 30px;box-shadow:0 20px 60px rgba(0,0,0,.4)}
+  .card{width:100%;max-width:460px;background:var(--ink-soft);border:1px solid #e1d6c6;
+    border-radius:20px;padding:34px 30px;box-shadow:0 20px 60px rgba(66,57,47,.08)}
   .logo{width:52px;height:52px;border-radius:14px;background:var(--ink-card);
     display:flex;align-items:center;justify-content:center;margin:0 auto 16px;font-size:26px}
-  h1{font-size:22px;font-weight:800;text-align:center;margin:0 0 6px}
+  h1{font-family:Georgia,serif;font-size:28px;font-weight:600;text-align:center;margin:0 0 6px}
   .sub{color:var(--paper-dim);font-size:14px;text-align:center;margin:0 0 24px;line-height:1.5}
-  label{display:block;font-size:13px;color:var(--paper-dim);margin:16px 0 6px}
-  input{width:100%;padding:13px 14px;background:var(--ink-card);border:1px solid #33301f;
-    border-radius:12px;color:var(--paper);font-size:15px;outline:none}
+  label{display:block;font-size:14px;color:var(--paper-dim);margin:16px 0 6px}
+  input{width:100%;padding:13px 14px;background:var(--ink-card);border:1px solid #968572;
+    border-radius:12px;color:var(--paper);font-size:16px;outline:none}
   input:focus{border-color:var(--sun)}
-  textarea{width:100%;padding:13px 14px;background:var(--ink-card);border:1px solid #33301f;
-    border-radius:12px;color:var(--paper);font-size:12.5px;outline:none;resize:vertical;
+  textarea{width:100%;padding:13px 14px;background:var(--ink-card);border:1px solid #968572;
+    border-radius:12px;color:var(--paper);font-size:14px;outline:none;resize:vertical;
     font-family:ui-monospace,Menlo,monospace}
   textarea:focus{border-color:var(--sun)}
-  .alt{text-align:center;font-size:13px;color:var(--paper-dim);margin-top:18px}
+  .alt{text-align:center;font-size:14px;color:var(--paper-dim);margin-top:18px}
   .alt a{color:var(--sun);text-decoration:none}
-  .note{font-size:11.5px;color:var(--paper-dim);text-align:center;margin-top:14px;line-height:1.5}
-  button{width:100%;margin-top:22px;padding:14px;background:var(--sun);color:#1a1a1a;
+  .note{font-size:14px;color:var(--paper-dim);text-align:center;margin-top:14px;line-height:1.5}
+  button{width:100%;margin-top:22px;padding:14px;background:var(--sun);color:#fffdf8;
     border:0;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer}
   button:disabled{opacity:.5;cursor:default}
-  .err{color:var(--danger);font-size:13px;margin-top:12px;text-align:center;min-height:18px}
+  .err{color:var(--danger);font-size:14px;margin-top:12px;text-align:center;min-height:18px}
   .hidden{display:none}
   .center{text-align:center}
   .qrbox{background:#fff;border-radius:16px;padding:16px;width:260px;margin:8px auto 0}
@@ -50,6 +51,10 @@
   .steps li{padding:6px 0;color:var(--paper-dim);font-size:13.5px;display:flex;gap:8px}
   .steps li.done{color:var(--paper)}
   .steps li .b{color:var(--sun)}
+  :focus-visible{outline:3px solid var(--sun);outline-offset:3px}
+  a{display:inline-block;min-height:44px;padding:12px 0}
+  @media(max-width:480px){body{padding:16px}.card{padding:26px 20px}.qrbox{max-width:100%}}
+  @media(prefers-reduced-motion:reduce){.spinner{animation:none}}
 </style>
 </head>
 <body>
@@ -58,43 +63,48 @@
 
   <!-- FORM -->
   <section id="s-form">
-    <h1>Set up your box</h1>
+    <h1>Set up Lodge</h1>
     <p class="sub">Pick a username and password. Your phone signs in with these — keep the
       password safe, there's no way to reset it.</p>
     <form id="form" autocomplete="off">
       <label for="u">Username</label>
       <input id="u" name="username" placeholder="e.g. alex" autocapitalize="none" autocorrect="off" spellcheck="false" required>
       <label for="p">Password</label>
-      <input id="p" name="password" type="password" placeholder="a strong password" required>
+      <input id="p" name="password" type="password" minlength="8" maxlength="1024" autocomplete="new-password" placeholder="a strong password" required>
       <label for="p2">Confirm password</label>
       <input id="p2" type="password" placeholder="repeat it" required>
+      <p class="note">Lodge includes Conductor and a Docker worker. Connect your Codex account from the Agents screen after setup.</p>
       <button id="go" type="submit">Create my box</button>
-      <div class="err" id="formErr"></div>
+      <div role="alert" class="err" id="formErr"></div>
     </form>
-    <p class="alt">Rebuilding a box you backed up? <a href="#" id="toRestore">Restore from a backup</a></p>
+    <p class="alt">Already have an identity export? <a href="#" id="toRestore">Restore Lodge identity</a></p>
   </section>
 
   <!-- RESTORE -->
   <section id="s-restore" class="hidden">
-    <h1>Restore your box</h1>
-    <p class="sub">Paste the backup you saved from the Privacy Bolt app and enter its passphrase.
-      Your box comes back on the <strong>same address</strong>, with the same login.</p>
+    <h1>Restore Lodge identity</h1>
+    <p class="sub">Choose the encrypted identity file you exported from Privacy Bolt or Privacy Lodge, then enter its passphrase.
+      Lodge comes back on the <strong>same address</strong>, with the same login.</p>
     <form id="restoreForm" autocomplete="off">
-      <label for="env">Backup</label>
-      <textarea id="env" rows="5" placeholder="Paste the backup text here" required></textarea>
-      <label for="rp">Backup passphrase</label>
-      <input id="rp" type="password" placeholder="the passphrase you chose" required>
-      <button id="rgo" type="submit">Restore my box</button>
-      <div class="err" id="restoreErr"></div>
+      <label for="identityFile">Identity export (.json)</label>
+      <input id="identityFile" type="file" accept=".json,application/json">
+      <p id="fileStatus" role="status" class="note"></p>
+      <details><summary>Paste the file contents instead</summary>
+        <label for="env">Encrypted identity</label>
+        <textarea id="env" rows="5" maxlength="1048576" placeholder="Paste the JSON from your identity export"></textarea>
+      </details>
+      <label for="rp">Identity export passphrase</label>
+      <input id="rp" type="password" maxlength="1024" placeholder="the passphrase you chose" required>
+      <button id="rgo" type="submit">Restore identity</button>
+      <div role="alert" class="err" id="restoreErr"></div>
     </form>
     <p class="alt"><a href="#" id="toForm">Back to creating a new box</a></p>
-    <p class="note">Message history isn't part of a backup — your address, account and contacts
-      list come back; past conversations don't.</p>
+    <p class="note">An identity export contains your address, account and contacts. It does not contain messages, files or agent workspaces. To restore a full Docker backup, use Privacy Lodge's backup/restore command on the machine that runs Lodge.</p>
   </section>
 
   <!-- PROVISIONING -->
   <section id="s-prov" class="hidden center">
-    <h1>Setting up your box…</h1>
+    <h1>Setting up Lodge…</h1>
     <div class="spinner"></div>
     <p class="stage" id="stage">Starting…</p>
     <ul class="steps">
@@ -125,7 +135,9 @@
   <section id="s-err" class="hidden center">
     <h1>Something needs attention</h1>
     <p class="sub" id="errMsg"></p>
+    <p class="note">Check that Privacy Lodge is running on this machine. This page will update when the box recovers.</p>
   </section>
+  <p id="connection" role="status" class="note"></p>
 </div>
 
 <script>
@@ -139,21 +151,37 @@
   let mode = 'form';
   $('toRestore').addEventListener('click', (e) => { e.preventDefault(); mode = 'restore'; show('restore'); });
   $('toForm').addEventListener('click', (e) => { e.preventDefault(); mode = 'form'; show('form'); });
+  let fileRead = 0;
+  $('identityFile').addEventListener('change', async () => {
+    const version = ++fileRead;
+    const file = $('identityFile').files[0];
+    $('env').value = ''; $('fileStatus').textContent = ''; $('restoreErr').textContent = '';
+    if (!file) return;
+    if (file.size > 1048576) { $('restoreErr').textContent = 'This file is too large for an identity export. Full Docker backups are restored on the machine running Lodge.'; return; }
+    try {
+      const text = await file.text();
+      if (version !== fileRead) return;
+      JSON.parse(text);
+      $('env').value = text;
+      $('fileStatus').textContent = file.name + ' selected. Enter its passphrase below.';
+    } catch (_) { if (version === fileRead) $('restoreErr').textContent = 'Choose a readable JSON identity export.'; }
+  });
 
   $('restoreForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     $('restoreErr').textContent = '';
     const env = $('env').value.trim(), rp = $('rp').value;
-    if (!env) { $('restoreErr').textContent = 'Paste your backup first.'; return; }
+    if (!env) { $('restoreErr').textContent = 'Choose an identity export or paste its contents first.'; return; }
     if (!rp)  { $('restoreErr').textContent = 'Enter the backup passphrase.'; return; }
     $('rgo').disabled = true;
     const body = 'envelope=' + encodeURIComponent(env) + '&passphrase=' + encodeURIComponent(rp);
     try {
       const r = await fetch('/restore', { method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'}, body });
+        headers:{'Content-Type':'application/x-www-form-urlencoded', 'X-Lodge-Setup':'__LODGE_SETUP_CSRF__'}, body });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { $('restoreErr').textContent = j.error || 'Restore failed.'; $('rgo').disabled = false; return; }
       submitted = true;
+      $('rp').value = ''; $('env').value = ''; $('identityFile').value = '';
       show('prov');
     } catch (err) {
       $('restoreErr').textContent = 'Couldn’t reach the box. Is it still running?';
@@ -172,10 +200,11 @@
     const body = 'username=' + encodeURIComponent(u) + '&password=' + encodeURIComponent(p);
     try {
       const r = await fetch('/provision', { method:'POST',
-        headers:{'Content-Type':'application/x-www-form-urlencoded'}, body });
+        headers:{'Content-Type':'application/x-www-form-urlencoded', 'X-Lodge-Setup':'__LODGE_SETUP_CSRF__'}, body });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { $('formErr').textContent = j.error || 'Setup couldn’t start.'; $('go').disabled = false; return; }
       submitted = true;
+      $('p').value = ''; $('p2').value = '';
       show('prov');
     } catch (err) {
       $('formErr').textContent = 'Couldn’t reach the box. Is it still running?';
@@ -184,10 +213,13 @@
   });
 
   let qrDrawn = false;
+  let failedPolls = 0;
   async function poll() {
     try {
-      const r = await fetch('/status', { cache:'no-store' });
+      const r = await fetch('/status', { cache:'no-store', signal:AbortSignal.timeout(10000) });
+      if (!r.ok) throw new Error('Status unavailable');
       const s = await r.json();
+      failedPolls = 0; $('connection').textContent = '';
       if (s.phone_connected) { show('done'); return; }        // stop polling once connected
       if (s.error) { $('errMsg').textContent = s.error; show('err'); }
       else if (s.qr_svg) {
@@ -211,7 +243,9 @@
       } else {
         show(mode);   // 'form' or 'restore' — whichever the user is on
       }
-    } catch (e) { /* box busy/starting — keep polling */ }
+    } catch (e) {
+      if (++failedPolls >= 3) $('connection').textContent = 'Waiting for Privacy Lodge. Keep the app or container running; this page reconnects automatically.';
+    }
     setTimeout(poll, 1500);
   }
   poll();

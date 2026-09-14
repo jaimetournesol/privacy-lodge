@@ -1,0 +1,194 @@
+/* Mobile navigation is stable across Chat, Voice, and Stage. */
+#mobileNav { display: none; }
+#mobileProject { display: none; }
+:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+#toast { pointer-events: none; }
+#fleetSettings { margin-top:24px; border-top:1px solid var(--border); padding-top:12px; }
+#fleetSettings summary { cursor:pointer; padding:12px 0; font-weight:600; }
+.settings-voice { gap:16px; align-items:end; }
+.settings-voice label { display:flex; flex-direction:column; gap:6px; }
+body.mobile { height: 100dvh; width: 100%; overflow: hidden; grid-template-rows: minmax(0,1fr); padding-bottom: calc(var(--nav-height,64px) + env(safe-area-inset-bottom)); }
+body.mobile header { display: none !important; }
+body.mobile main, body.mobile.noside main { grid-template-columns: minmax(0,1fr); width: 100%; overflow: hidden; }
+body.mobile #mobileNav { position: fixed; bottom: 0; left: 0; right: 0; z-index: 47; height: calc(var(--nav-height,64px) + env(safe-area-inset-bottom)); padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 5px; background: #10141c; border-top: 1px solid var(--border-strong); }
+body.mobile #mobileNav button { min-width: 0; font-size: 13px; border-color: transparent; background: transparent; }
+body.mobile #mobileNav button[aria-current=page] { color: var(--accent); background: var(--accent-soft); border-color: rgba(255,138,92,.3); }
+body.mobile #chatPane, body.mobile.voicemode #chatPane { display: none !important; }
+body.mobile.showchat #chatPane { display: flex !important; position: fixed; inset: 0 0 calc(var(--nav-height,64px) + env(safe-area-inset-bottom)); width: 100%; max-width: 100%; box-shadow: none; animation: none; }
+body.mobile #chatHead { flex-wrap: wrap; min-width: 0; gap: 6px; padding: 8px 10px; }
+body.mobile #mobileProject { display: block; width: 100%; }
+body.mobile #chatWho { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.mobile #agentSel { flex: 1; min-width: 80px; max-width: 180px; }
+body.mobile #btnChatClose { display: none !important; }
+body.mobile #chatWhere, body.mobile #btnAgentRename { display: none; }
+body.mobile #composer { gap: 6px; padding: 10px; min-width: 0; }
+body.mobile #input { min-width: 0; font-size: 16px; }
+body.mobile #composer .composer-action { width:48px; height:48px; bottom:18px; }
+body.mobile #btnSend { right:18px; }
+body.mobile #btnAttach { left:18px; }
+body.mobile #input { padding-bottom:66px; }
+body.mobile.keyboard #composer .composer-action { bottom:12px; }
+body.mobile.keyboard #btnSend { right:16px; }
+body.mobile.keyboard #btnAttach { left:16px; }
+body.mobile #log { padding: 12px; overflow-wrap: anywhere; }
+body.mobile #log pre { max-width: 100%; overflow-x: auto; }
+body.mobile button, body.mobile select, body.mobile input[type=text], body.mobile input[type=password] { min-height: 48px; }
+body.mobile #vo { bottom: calc(var(--nav-height,64px) + env(safe-area-inset-bottom)); }
+body.mobile #voHud { padding: 10px 16px 18px; }
+body.mobile #voBtns { flex-wrap: wrap; justify-content: center; gap: 8px; }
+body.mobile #voBtns button { flex: 1 1 auto; min-width: 95px; padding: 9px 12px; }
+body.mobile #btnChatToggle { display: none; }
+body.mobile #voHint { display: block !important; max-width: 420px; margin: 10px auto 0; font-size: 12px; }
+body.mobile #voDiag { display: none; }
+body.mobile #voText { overflow-wrap: anywhere; max-height: 25dvh; overflow-y: auto; }
+body.mobile #voTop { top: 8px; }
+body.mobile #stageBar { flex-wrap: wrap; padding: 8px; gap: 6px; }
+body.mobile #stageWhere { max-width: 58vw; overflow: hidden; text-overflow: ellipsis; }
+body.mobile #presetSeg { display: flex; }
+body.mobile #presetSeg button { flex: 1; }
+body.mobile .tile .th { flex-wrap: wrap; }
+body.mobile #toast { bottom: calc(76px + env(safe-area-inset-bottom)); max-width: 90vw; width: max-content; }
+body.mobile .modal { padding: 12px; }
+body.mobile .modal .card { width: 100% !important; max-width: 640px; max-height: calc(100dvh - 24px); padding: 16px; overflow: auto; }
+body.mobile .modal input, body.mobile .modal select { max-width: 100% !important; }
+body.mobile .machine { overflow-x: auto; }
+body.mobile .row > * { min-width: 0; }
+body.mobile .settings-voice { display:grid; grid-template-columns:minmax(0,1fr); }
+body.mobile .settings-voice select { width:100%; }
+body.mobile #fleetSettings summary { min-height:48px; }
+body.mobile .machine td:last-child { white-space:normal !important; min-width:160px; }
+body.mobile .machine td button { margin:3px; }
+body.mobile #voiceMenu { max-width: calc(100vw - 24px); max-height: 70dvh; overflow: auto; }
+body.mobile #jump { bottom: 100px; }
+@media (orientation: landscape) and (max-height: 600px) {
+  body.mobile #voHud, body.mobile.presenter #voHud { grid-template-columns: 110px minmax(0,1fr); gap: 14px; text-align: left; align-items: center; padding: 8px 16px; }
+  body.mobile #voOrbWrap, body.mobile #voViz { width: 110px; height: 110px; }
+  body.mobile #voMain { padding: 0; }
+  body.mobile #voText { font-size: 20px; min-height: 24px; margin: 4px 0; max-height: 55px; }
+  body.mobile #voBtns { justify-content: flex-start; flex-wrap: nowrap; }
+  body.mobile #voBtns button { min-width: 0; width: auto; }
+  body.mobile #voHint { margin: 4px 0 0; font-size: 11px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
+}
+@media (orientation: portrait) {
+  body.mobile #stage.n2 { grid-template-columns: minmax(0,1fr); grid-template-rows: repeat(2,minmax(0,1fr)); }
+  body.mobile #stage.n3, body.mobile #stage.n4 { grid-template-columns: minmax(0,1fr); grid-template-rows: repeat(4,minmax(180px,1fr)); overflow-y: auto; }
+  body.mobile #stage.n3 { grid-template-rows: repeat(3,minmax(180px,1fr)); }
+  body.mobile #stage.n5, body.mobile #stage.n6 { grid-template-columns:minmax(0,1fr); grid-template-rows:repeat(5,minmax(180px,1fr)); overflow-y:auto; }
+  body.mobile #stage.n6 { grid-template-rows:repeat(6,minmax(180px,1fr)); }
+}
+body.mobile #voTitle, body.mobile #voViewSeg, body.mobile #voAuto { display: none; }
+body.mobile #chatPane { background: #0c1017; backdrop-filter: none; }
+
+body.mobile { height:var(--visible-height,100dvh); }
+body.mobile #mobileNav { bottom:var(--keyboard-inset,0px); }
+body.mobile.showchat #chatPane { bottom:calc(var(--nav-height,64px) + env(safe-area-inset-bottom) + var(--keyboard-inset,0px)); }
+body.mobile #vo { bottom:calc(var(--nav-height,64px) + env(safe-area-inset-bottom) + var(--keyboard-inset,0px)); }
+body.mobile.keyboard { --nav-height:48px; }
+body.mobile.keyboard #mobileNav { padding:0 4px; }
+body.mobile.keyboard #chatHead { padding:4px 10px; min-height:28px; }
+body.mobile.keyboard #mobileProject, body.mobile.keyboard #agentSel, body.mobile.keyboard #btnHome { display:none; }
+body.mobile.keyboard #composer { padding:6px 8px; }
+body.mobile.keyboard #log { padding:6px 12px; }
+
+/* Portrait Voice reserves a compact control area and gives the remaining height to Stage. */
+@media (orientation:portrait) {
+  body.mobile.voicemode { --voice-panel-height:clamp(260px,38%,320px); }
+  body.mobile.voicemode #voHud, body.mobile.voicemode.presenter #voHud { top:calc(100% - var(--voice-panel-height)); bottom:0; display:flex; flex-direction:column; align-items:center; justify-content:safe center; gap:4px; padding:8px 16px; overflow-y:auto; background:#0a1019; border:0; }
+  body.mobile.voicemode #voOrbWrap, body.mobile.voicemode #voViz { width:64px; height:64px; flex-shrink:0; }
+  body.mobile.voicemode #voOrb { width:48px; height:48px; margin:-24px 0 0 -24px; }
+  body.mobile.voicemode #voOrb::after { inset:-8px; }
+  body.mobile.voicemode #voMain { width:100%; padding:0; flex-shrink:0; }
+  body.mobile.voicemode #voText { font-size:18px; min-height:1.25em; margin:4px 0; max-height:50px; }
+  body.mobile.voicemode #voBtns { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+  body.mobile.voicemode #voBtns button { min-width:0; padding:8px; }
+  body.mobile.voicemode #voHint { font-size:11px; margin:6px auto 0; }
+}
+
+/* A static atmospheric fade joins the two halves without animated filters. */
+@media (orientation:portrait) {
+  body.mobile.voicemode .tile.kind-fleet { border-color:transparent; box-shadow:none; }
+  body.mobile.voicemode #vo::after { content:''; position:absolute; top:calc(100% - var(--voice-panel-height)); left:0; right:0; height:76px; transform:translateY(-100%); background:linear-gradient(to bottom,rgba(10,16,25,0),rgba(10,16,25,.7) 65%,#0a1019); pointer-events:none; }
+}
+
+/* Android/mobile landscape Voice: constellation left, controls right. */
+@media (orientation:landscape) {
+  body.mobile.voicemode .tile.kind-fleet { border-color:transparent; box-shadow:none; }
+  body.mobile.voicemode #voHud, body.mobile.voicemode.presenter #voHud { top:0; left:50%; right:0; bottom:0; display:flex; flex-direction:column; align-items:center; justify-content:safe center; text-align:center; gap:6px; padding:10px 16px; overflow-y:auto; background:#0a1019; border:0; }
+  body.mobile.voicemode #voOrbWrap, body.mobile.voicemode #voViz { width:74px; height:74px; flex-shrink:0; }
+  body.mobile.voicemode #voOrb { width:54px; height:54px; margin:-27px 0 0 -27px; }
+  body.mobile.voicemode #voOrb::after { inset:-7px; }
+  body.mobile.voicemode #voMain { width:100%; padding:0; flex-shrink:0; }
+  body.mobile.voicemode #voText { font-size:18px; margin:4px 0 8px; max-height:60px; }
+  body.mobile.voicemode #voBtns { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+  body.mobile.voicemode #voBtns button { min-width:0; padding:7px; }
+  body.mobile.voicemode #voHint { font-size:10.5px; margin:6px auto 0; }
+  body.mobile.voicemode #vo::after { content:''; position:absolute; top:0; bottom:0; left:50%; width:64px; transform:translateX(-100%); background:linear-gradient(to right,rgba(10,16,25,0),rgba(10,16,25,.7) 65%,#0a1019); pointer-events:none; }
+}
+
+/* Every Voice tile gets a real viewport; screens and Surfaces cannot sit behind the HUD. */
+body.mobile.voicemode #stage { position:absolute; inset:0 0 var(--voice-panel-height,50%) 0; overflow:auto; }
+body.mobile.voicemode.stage-content #vo::after { display:none; }
+@media(orientation:landscape) {
+  body.mobile.voicemode #stage { inset:0 50% 0 0; }
+}
+
+/* Compact Voice action dock: short labels, consistent icons, full touch targets. */
+body.mobile { --nav-height:56px; }
+body.mobile #mobileNav { padding-top:4px; padding-bottom:calc(4px + env(safe-area-inset-bottom)); }
+body.mobile #mobileNav button { border-radius:14px; font-size:12px; }
+body.mobile.voicemode #voBtns { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px; width:100%; max-width:360px; margin:12px auto 0; padding:5px; border:1px solid rgba(255,255,255,.07); border-radius:20px; background:rgba(255,255,255,.025); }
+body.mobile.voicemode #voBtns button { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; width:auto; min-width:0; min-height:56px; padding:7px 2px; border:1px solid transparent; border-radius:14px; font-size:11px; line-height:1.15; font-weight:500; background:transparent; color:#bac4d2; box-shadow:none; transform:none; }
+body.mobile.voicemode #voBtns button::before { content:''; width:20px; height:20px; flex-shrink:0; background:currentColor; -webkit-mask:var(--control-icon) center/contain no-repeat; mask:var(--control-icon) center/contain no-repeat; }
+body.mobile.voicemode #voBtns button:hover { background:rgba(255,255,255,.06); color:#f0f3f7; }
+body.mobile.voicemode #voBtns button:active { background:rgba(255,255,255,.1); transform:scale(.97); }
+body.mobile.voicemode #voBtns #voMute { background:rgba(255,138,92,.12); color:#ffb596; }
+body.mobile.voicemode #voBtns #voMute.on { background:rgba(229,72,77,.14) !important; border-color:rgba(229,72,77,.25); color:#ffa6ac; }
+body.mobile.voicemode #voRetry, body.mobile.voicemode #voPtt { grid-column:1 / -1; order:1; background:var(--accent-soft); }
+body.mobile.voicemode #voRetry::before, body.mobile.voicemode #voPtt::before { display:none; }
+body.mobile #voMute { --control-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.7%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%229%22%20y%3D%222%22%20width%3D%226%22%20height%3D%2212%22%20rx%3D%223%22%2F%3E%3Cpath%20d%3D%22M5%2010v2a7%207%200%200%200%2014%200v-2M12%2019v3m-4%200h8%22%2F%3E%3C%2Fsvg%3E"); }
+body.mobile #voMute.on { --control-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.7%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22m3%203%2018%2018M9%209v3a3%203%200%200%200%205%202M9%205V4a3%203%200%200%201%206%200v7M5%2010v2a7%207%200%200%200%2012%205m2-5v-2M12%2019v3m-4%200h8%22%2F%3E%3C%2Fsvg%3E"); }
+body.mobile #voStop { --control-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.7%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%225%22%20y%3D%225%22%20width%3D%2214%22%20height%3D%2214%22%20rx%3D%223%22%2F%3E%3C%2Fsvg%3E"); }
+body.mobile #voRotate { --control-icon:url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22black%22%20stroke-width%3D%221.7%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Crect%20x%3D%228%22%20y%3D%224%22%20width%3D%228%22%20height%3D%2216%22%20rx%3D%222%22%2F%3E%3Cpath%20d%3D%22M3%209a9%209%200%200%201%202-4l2-2m-4%200h4v4m14%208a9%209%200%200%201-2%204l-2%202m4%200h-4v-4%22%2F%3E%3C%2Fsvg%3E"); }
+body.mobile.voicemode #voBtns #btnChatToggle { display:none; }
+
+/* Typing owns the available viewport; navigation returns when the keyboard closes. */
+body.mobile.keyboard { --nav-height:0px; }
+body.mobile.keyboard #mobileNav { display:none; }
+@media (orientation:landscape) and (max-height:260px) {
+  body.mobile.keyboard #chatHead { display:none; }
+  body.mobile.keyboard #composer { flex-shrink:0; }
+}
+body.mobile #voBtns #voClose { display:none; }
+
+/* Reset sits beside the Voice orb, leaving every Surface control unobscured. */
+body.mobile.voicemode #voTop { top:calc(100% - var(--voice-panel-height) + 8px); left:auto; right:12px; z-index:2; pointer-events:none; }
+body.mobile #voResetStage { pointer-events:auto; min-height:48px; }
+@media (orientation:landscape) {
+  body.mobile.voicemode #voTop { top:8px; right:12px; }
+}
+
+/* Stage is a collection of presented items, each with its own manipulation controls. */
+.stage-item-tools { display:none; }
+body.mobile #stageBar { display:none !important; }
+body.mobile.stage-manage .tile .th { display:none; }
+body.mobile.stage-manage .stage-item-tools { display:block; flex-shrink:0; padding:8px 10px; background:#111925; border-bottom:1px solid #ffffff12; }
+.stage-item-heading { min-height:48px; display:flex; flex-direction:column; justify-content:center; gap:3px; }
+.stage-item-heading b { font-size:13px; font-weight:600; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.stage-item-heading span { color:#929eaf; font-size:11px; }
+.stage-item-actions { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px; margin-top:6px; }
+.stage-item-actions button { padding:5px 2px; font-size:11px; min-width:0; border-radius:12px; border-color:transparent; background:#ffffff06; }
+.stage-item-actions button[aria-pressed=true] { color:var(--accent); background:var(--accent-soft); }
+body.mobile.stage-manage #stage { overflow:auto; grid-auto-rows:minmax(270px,1fr); }
+body.mobile.stage-manage #stage.n3,body.mobile.stage-manage #stage.n4,body.mobile.stage-manage #stage.n5,body.mobile.stage-manage #stage.n6 { grid-template-rows:none; }
+@media(orientation:landscape){body.mobile.stage-manage #stage.n5,body.mobile.stage-manage #stage.n6{grid-template-columns:repeat(2,minmax(0,1fr));}}
+
+/* Native connection/reload menu is visible only while Settings is selected. */
+body.mobile #settings { inset:0 0 calc(var(--nav-height,56px) + env(safe-area-inset-bottom)); padding:0; }
+body.mobile #settings .card { width:100% !important; max-width:none; height:100%; max-height:100%; border:0; border-radius:0; padding:12px 16px; }
+body.mobile #settings .card > .row:first-child { min-height:48px; padding-right:64px; }
+
+#btnAttach[data-count]:not([data-count=""])::after { content:attr(data-count); position:absolute; top:0; right:0; min-width:16px; height:16px; border-radius:8px; background:var(--accent); color:#111; font-size:10px; line-height:16px; }
+@media(max-height:300px){body.mobile.keyboard #attachments { display:none; }}

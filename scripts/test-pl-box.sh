@@ -31,6 +31,16 @@ cleanup() {
   docker ps -aq --filter "ancestor=$PREFIX-img" | xargs -r docker rm -f >/dev/null 2>&1
   docker rmi -f "$PREFIX-img" >/dev/null 2>&1
   docker volume ls --format '{{.Name}}' | grep "^$PREFIX" | xargs -r docker volume rm -f >/dev/null 2>&1
+  # Only restored volumes selected by this run's scratch installations.
+  for envfile in "$WORK"/install*/.env; do
+    [ -f "$envfile" ] || continue
+    restored="$(sed -n 's/^PL_VOLUME=//p' "$envfile")"
+    if [[ "$restored" =~ ^privacy-lodge-restored-[a-f0-9]{12}$ ]]; then
+      for suffix in '' -legacy-agents -handoff -conductor -worker -agent-peer; do
+        docker volume rm "$restored$suffix" >/dev/null 2>&1 || true
+      done
+    fi
+  done
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -46,12 +56,12 @@ fi
 # ---- a fake install: scratch dir with .env + pl-box, volumes seeded with marker files ----
 BOXV="$PREFIX-box"; AGENTV="$PREFIX-agent"; HANDV="$PREFIX-handoff"
 INSTALL="$WORK/install"; mkdir -p "$INSTALL"
-cp "$PPBOX" "$INSTALL/pl-box"; chmod +x "$INSTALL/pl-box"
+cp "$PPBOX" "$INSTALL/pl-box"; chmod +x "$INSTALL/pl-box"; cp "$HERE/docker/restore-bundle.py" "$INSTALL/restore-bundle.py"
 cat > "$INSTALL/.env" <<EOF
 PL_USER=tester
 PL_BOX=testbox
 PL_PASS=irrelevant
-PL_SECRETS_KEY=THE-REAL-KEY
+PL_SECRETS_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 PL_VOLUME=$BOXV
 PL_AGENT_VOLUME=$AGENTV
 PL_AGENT_HANDOFF_VOLUME=$HANDV
@@ -64,6 +74,7 @@ seed() { # $1=volume $2=marker-relpath $3=content
 }
 say "seeding throwaway volumes"
 seed "$BOXV" "box.json" '{"box_name":"testbox","username":"tester","onion":"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmmnnnn.onion"}'
+seed "$BOXV" "secrets.json" '{"fixture":true}'
 seed "$BOXV" "data/tor/hs/hs_ed25519_secret_key" "FAKE-ONION-KEY"
 seed "$AGENTV" "hermes/auth.json" '{"providers":[{"provider":"fake"}]}'
 seed "$HANDV" "webui-password" "hunter2"
@@ -76,11 +87,11 @@ vol_file() { docker run --rm -v "$1":/v:ro alpine cat "/v/$2" 2>/dev/null; }
 # create a new empty volume = a new box), and `migrate-env` must fix it in place, once.
 say "pre-rename PP_* .env: read by pl-box, refused by compose commands, fixed by migrate-env"
 INSTALLC="$WORK/installc"; mkdir -p "$INSTALLC"
-cp "$PPBOX" "$INSTALLC/pl-box"; chmod +x "$INSTALLC/pl-box"
+cp "$PPBOX" "$INSTALLC/pl-box"; chmod +x "$INSTALLC/pl-box"; cp "$HERE/docker/restore-bundle.py" "$INSTALLC/restore-bundle.py"
 sed -e 's/^PL_/PP_/' "$INSTALL/.env" > "$INSTALLC/.env"
 ( cd "$INSTALLC" && ./pl-box backup "$WORK/compat" ) >/dev/null 2>&1
 CB="$(ls "$WORK/compat"/pl-box-*.tgz 2>/dev/null | head -1)"
-if [ -n "$CB" ] && tar xzf "$CB" -O ./MANIFEST 2>/dev/null | grep -q '^secrets_key=THE-REAL-KEY$'; then
+if [ -n "$CB" ] && tar xzf "$CB" -O ./MANIFEST 2>/dev/null | grep -q '^secrets_key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=$'; then
   good "PP_* keys are read (backup carries the secrets key)"
 else
   bad "PP_* .env not read: no bundle / key missing"
@@ -98,7 +109,7 @@ else
   bad "migrate-env left $(grep -c '^PP_' "$INSTALLC/.env") PP_* key(s)"
 fi
 ls "$INSTALLC"/.env.bak-* >/dev/null 2>&1 && good "migrate-env kept a backup" || bad "no .env backup kept"
-grep -q '^PL_SECRETS_KEY=THE-REAL-KEY$' "$INSTALLC/.env" && good "values untouched by migrate-env" || bad "a value changed"
+grep -q '^PL_SECRETS_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=$' "$INSTALLC/.env" && good "values untouched by migrate-env" || bad "a value changed"
 ( cd "$INSTALLC" && ./pl-box migrate-env ) 2>&1 | grep -q 'already' \
   && good "migrate-env is idempotent" || bad "second migrate-env did not no-op"
 printf 'PL_IMAGE=jaimemelon/pureprivacy-box:0.1.10\n' >> "$INSTALLC/.env"
@@ -135,7 +146,7 @@ if [ -n "$RPORT" ]; then
   # Drop the local copies of the NEW tag: an update has to genuinely pull it.
   docker rmi "$BOXREPO:0.1.11" "$AGREPO:0.1.11" >/dev/null 2>&1
   INSTALLU="$WORK/installu"; mkdir -p "$INSTALLU"
-  cp "$PPBOX" "$INSTALLU/pl-box"; chmod +x "$INSTALLU/pl-box"
+  cp "$PPBOX" "$INSTALLU/pl-box"; chmod +x "$INSTALLU/pl-box"; cp "$HERE/docker/restore-bundle.py" "$INSTALLU/restore-bundle.py"
   # A build.sh that only leaves a fingerprint — the Hub path must never reach it.
   printf '#!/bin/sh\ntouch "$(dirname "$0")/BUILD-SH-WAS-CALLED"\n' > "$INSTALLU/build.sh"
   chmod +x "$INSTALLU/build.sh"
@@ -200,7 +211,7 @@ else
 fi
 
 # --------------------------------------------------------------------- backup: bundle ----
-say "backup produces a format-2 bundle covering all three volumes"
+say "backup produces a bundle covering all three legacy volumes"
 ( cd "$INSTALL" && ./pl-box backup "$WORK/backups" ) >/dev/null 2>&1
 BUNDLE="$(ls "$WORK/backups"/pl-box-*.tgz 2>/dev/null | head -1)"
 if [ -n "$BUNDLE" ]; then good "backup wrote $(basename "$BUNDLE")"; else bad "no bundle written"; fi
@@ -217,7 +228,7 @@ else
 fi
 
 MAN="$(tar xzf "$BUNDLE" -O ./MANIFEST 2>/dev/null)"
-echo "$MAN" | grep -q '^secrets_key=THE-REAL-KEY$' \
+echo "$MAN" | grep -q '^secrets_key=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=$' \
   && good "MANIFEST carries the secrets key" \
   || bad "MANIFEST is missing the secrets key (an undecryptable backup)"
 echo "$MAN" | grep -q '^onion=aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmmnnnn.onion$' \
@@ -230,40 +241,40 @@ perm="$(stat -c %a "$BUNDLE" 2>/dev/null || stat -f %Lp "$BUNDLE")"
 # ------------------------------------------------- restore: bundle into fresh volumes ----
 say "restore round-trips the bundle into a second set of volumes"
 INSTALL2="$WORK/install2"; mkdir -p "$INSTALL2"
-cp "$PPBOX" "$INSTALL2/pl-box"; chmod +x "$INSTALL2/pl-box"
-# Same volume names would collide with the seeded set; a restore must land in ITS install's
-# volumes. Wrong secrets key on purpose: the repair prompt is part of the contract.
+cp "$PPBOX" "$INSTALL2/pl-box"; chmod +x "$INSTALL2/pl-box"; cp "$HERE/docker/restore-bundle.py" "$INSTALL2/restore-bundle.py"
+# Restore selects fresh volumes and retains the previous identity.
+# A wrong storage key must be repaired only after the owner accepts the restore.
 sed -e "s/$BOXV/$PREFIX-box2/" -e "s/$AGENTV/$PREFIX-agent2/" -e "s/$HANDV/$PREFIX-handoff2/" \
-    -e 's/THE-REAL-KEY/WRONG-KEY/' "$INSTALL/.env" > "$INSTALL2/.env"
+    -e 's/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=/WRONG-KEY/' "$INSTALL/.env" > "$INSTALL2/.env"
 ( cd "$INSTALL2" && printf 'y\ny\n' | ./pl-box restore "$BUNDLE" ) >/dev/null 2>&1
 
-[ "$(vol_file "$PREFIX-box2" data/tor/hs/hs_ed25519_secret_key)" = "FAKE-ONION-KEY" ] \
+[ "$(vol_file "$(sed -n 's/^PL_VOLUME=//p' "$INSTALL2/.env")" data/tor/hs/hs_ed25519_secret_key)" = "FAKE-ONION-KEY" ] \
   && good "box volume restored (onion key byte-identical)" || bad "box volume content wrong after restore"
-[ "$(vol_file "$PREFIX-agent2" hermes/auth.json)" = '{"providers":[{"provider":"fake"}]}' ] \
+[ "$(vol_file "$(sed -n 's/^PL_AGENT_VOLUME=//p' "$INSTALL2/.env")" hermes/auth.json)" = '{"providers":[{"provider":"fake"}]}' ] \
   && good "agent volume restored" || bad "agent volume content wrong after restore"
-[ "$(vol_file "$PREFIX-handoff2" webui-password)" = "hunter2" ] \
+[ "$(vol_file "$(sed -n 's/^PL_AGENT_HANDOFF_VOLUME=//p' "$INSTALL2/.env")" webui-password)" = "hunter2" ] \
   && good "handoff volume restored" || bad "handoff volume content wrong after restore"
-grep -q '^PL_SECRETS_KEY=THE-REAL-KEY$' "$INSTALL2/.env" \
+grep -q '^PL_SECRETS_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=$' "$INSTALL2/.env" \
   && good "mismatched PL_SECRETS_KEY repaired in .env (with consent)" \
   || bad ".env key not repaired: $(grep ^PL_SECRETS_KEY= "$INSTALL2/.env")"
-ls "$INSTALL2"/.env.bak-* >/dev/null 2>&1 \
+ls "$INSTALL2"/.env.before-restore-* >/dev/null 2>&1 \
   && good "previous .env kept alongside" || bad "no .env backup was kept"
 
 # ---------------------------------------------- restore: legacy single-volume backups ----
 say "legacy (pre-bundle) backups still restore"
 docker run --rm -v "$BOXV":/v:ro -v "$WORK":/out alpine tar czf /out/legacy.tgz -C /v . >/dev/null
 INSTALL3="$WORK/install3"; mkdir -p "$INSTALL3"
-cp "$PPBOX" "$INSTALL3/pl-box"; chmod +x "$INSTALL3/pl-box"
+cp "$PPBOX" "$INSTALL3/pl-box"; chmod +x "$INSTALL3/pl-box"; cp "$HERE/docker/restore-bundle.py" "$INSTALL3/restore-bundle.py"
 sed "s/$BOXV/$PREFIX-box3/" "$INSTALL/.env" > "$INSTALL3/.env"
 ( cd "$INSTALL3" && printf 'y\n' | ./pl-box restore "$WORK/legacy.tgz" ) >/dev/null 2>&1
-[ "$(vol_file "$PREFIX-box3" data/tor/hs/hs_ed25519_secret_key)" = "FAKE-ONION-KEY" ] \
+[ "$(vol_file "$(sed -n 's/^PL_VOLUME=//p' "$INSTALL3/.env")" data/tor/hs/hs_ed25519_secret_key)" = "FAKE-ONION-KEY" ] \
   && good "legacy tar restored as a plain volume (not treated as a bundle)" \
   || bad "legacy restore broken"
 
 # The reverse misclassification is the SIGPIPE bug: a large bundle read as legacy fills
 # the volume with tarballs. The bundle restore above already proves bundles classify as
 # bundles — this asserts the extracted volume holds real content, not member tarballs.
-if docker run --rm -v "$PREFIX-box2":/v:ro alpine sh -c 'ls /v/box.tgz' >/dev/null 2>&1; then
+if docker run --rm -v "$(sed -n 's/^PL_VOLUME=//p' "$INSTALL2/.env")":/v:ro alpine sh -c 'ls /v/box.tgz' >/dev/null 2>&1; then
   bad "bundle was extracted AS a legacy tar (member tarballs in the volume)"
 else
   good "no member tarballs in restored volume (bundle/legacy sniff is sound)"
@@ -279,7 +290,7 @@ say "a plain box (box volume only, no agent/handoff volumes) still backs up"
 seed "$PREFIX-plain" "box.json" '{"box_name":"plain","username":"tester","onion":"aaaabbbbccccddddeeeeffffgggghhhhiiiijjjjkkkkllllmmmmnnnn.onion"}'
 seed "$PREFIX-plain" "data/tor/hs/hs_ed25519_secret_key" "PLAIN-ONION-KEY"
 INSTALLP="$WORK/installp"; mkdir -p "$INSTALLP"
-cp "$PPBOX" "$INSTALLP/pl-box"; chmod +x "$INSTALLP/pl-box"
+cp "$PPBOX" "$INSTALLP/pl-box"; chmod +x "$INSTALLP/pl-box"; cp "$HERE/docker/restore-bundle.py" "$INSTALLP/restore-bundle.py"
 sed -e "s/$BOXV/$PREFIX-plain/" -e "s/$AGENTV/$PREFIX-no-such-agent/" -e "s/$HANDV/$PREFIX-no-such-handoff/" \
     "$INSTALL/.env" > "$INSTALLP/.env"
 ( cd "$INSTALLP" && ./pl-box backup "$WORK/plain" ) >/dev/null 2>&1; rc=$?
@@ -324,17 +335,17 @@ if [ -n "${PL_CRYPT:-}" ]; then
     && good ".enc carries the pl-crypt header" || bad ".enc header missing/wrong"
 
   INSTALL5="$WORK/install5"; mkdir -p "$INSTALL5"
-  cp "$PPBOX" "$INSTALL5/pl-box"; chmod +x "$INSTALL5/pl-box"
+  cp "$PPBOX" "$INSTALL5/pl-box"; chmod +x "$INSTALL5/pl-box"; cp "$HERE/docker/restore-bundle.py" "$INSTALL5/restore-bundle.py"
   sed -e "s/$BOXV/$PREFIX-box5/" -e "s/$AGENTV/$PREFIX-agent5/" -e "s/$HANDV/$PREFIX-handoff5/" \
       "$INSTALL/.env" > "$INSTALL5/.env"
   ( cd "$INSTALL5" && PL_BACKUP_PASSPHRASE=correct-horse printf 'y\n' | \
       PL_BACKUP_PASSPHRASE=correct-horse ./pl-box restore "$ENC" ) >/dev/null 2>&1
-  [ "$(vol_file "$PREFIX-box5" data/tor/hs/hs_ed25519_secret_key)" = "FAKE-ONION-KEY" ] \
+  [ "$(vol_file "$(sed -n 's/^PL_VOLUME=//p' "$INSTALL5/.env")" data/tor/hs/hs_ed25519_secret_key)" = "FAKE-ONION-KEY" ] \
     && good "encrypted bundle restored (onion key byte-identical)" \
     || bad "encrypted restore content wrong"
 
   INSTALL6="$WORK/install6"; mkdir -p "$INSTALL6"
-  cp "$PPBOX" "$INSTALL6/pl-box"; chmod +x "$INSTALL6/pl-box"
+  cp "$PPBOX" "$INSTALL6/pl-box"; chmod +x "$INSTALL6/pl-box"; cp "$HERE/docker/restore-bundle.py" "$INSTALL6/restore-bundle.py"
   sed "s/$BOXV/$PREFIX-box6/" "$INSTALL/.env" > "$INSTALL6/.env"
   ( cd "$INSTALL6" && PL_BACKUP_PASSPHRASE=wrong-horse1 printf 'y\n' | \
       PL_BACKUP_PASSPHRASE=wrong-horse1 ./pl-box restore "$ENC" ) >/dev/null 2>&1
@@ -358,7 +369,7 @@ if [ -n "${PL_CRYPT:-}" ]; then
     # Bound the run: without --entrypoint pl-box would sit inside the decoy forever.
     T=""; command -v timeout >/dev/null 2>&1 && T="timeout 90"
     INSTALL7="$WORK/install7"; mkdir -p "$INSTALL7"
-    cp "$PPBOX" "$INSTALL7/pl-box"; chmod +x "$INSTALL7/pl-box"
+    cp "$PPBOX" "$INSTALL7/pl-box"; chmod +x "$INSTALL7/pl-box"; cp "$HERE/docker/restore-bundle.py" "$INSTALL7/restore-bundle.py"
     { cat "$INSTALL/.env"; printf 'PL_IMAGE=%s\n' "$TIMG"; } > "$INSTALL7/.env"
     # env -u: pl-box must find pl-crypt on its own — no override, no repo at ../src-tauri.
     ( cd "$INSTALL7" && env -u PL_CRYPT -u IMAGE PL_BACKUP_PASSPHRASE=correct-horse \
@@ -377,12 +388,12 @@ if [ -n "${PL_CRYPT:-}" ]; then
       || bad "plaintext bundle left next to the .enc (docker path)"
     if [ -n "$ENC7" ]; then
       INSTALL8="$WORK/install8"; mkdir -p "$INSTALL8"
-      cp "$PPBOX" "$INSTALL8/pl-box"; chmod +x "$INSTALL8/pl-box"
+      cp "$PPBOX" "$INSTALL8/pl-box"; chmod +x "$INSTALL8/pl-box"; cp "$HERE/docker/restore-bundle.py" "$INSTALL8/restore-bundle.py"
       { sed -e "s/$BOXV/$PREFIX-box8/" -e "s/$AGENTV/$PREFIX-agent8/" -e "s/$HANDV/$PREFIX-handoff8/" \
             "$INSTALL/.env"; printf 'PL_IMAGE=%s\n' "$TIMG"; } > "$INSTALL8/.env"
       ( cd "$INSTALL8" && printf 'y\ny\n' | env -u PL_CRYPT -u IMAGE PL_BACKUP_PASSPHRASE=correct-horse \
           $T ./pl-box restore "$ENC7" ) >/dev/null 2>&1
-      [ "$(vol_file "$PREFIX-box8" data/tor/hs/hs_ed25519_secret_key)" = "FAKE-ONION-KEY" ] \
+      [ "$(vol_file "$(sed -n 's/^PL_VOLUME=//p' "$INSTALL8/.env")" data/tor/hs/hs_ed25519_secret_key)" = "FAKE-ONION-KEY" ] \
         && good "opened by the image's pl-crypt and restored (onion key byte-identical)" \
         || bad "docker-path restore content wrong"
     fi
@@ -403,7 +414,7 @@ left="$(docker volume ls --format '{{.Name}}' | grep -cE "^($BOXV|$AGENTV|$HANDV
 # destroy must be gated on the exact box name — a wrong name removes nothing.
 seed "$PREFIX-box4" "box.json" '{}'
 INSTALL4="$WORK/install4"; mkdir -p "$INSTALL4"
-cp "$PPBOX" "$INSTALL4/pl-box"; chmod +x "$INSTALL4/pl-box"
+cp "$PPBOX" "$INSTALL4/pl-box"; chmod +x "$INSTALL4/pl-box"; cp "$HERE/docker/restore-bundle.py" "$INSTALL4/restore-bundle.py"
 sed "s/$BOXV/$PREFIX-box4/" "$INSTALL/.env" > "$INSTALL4/.env"
 ( cd "$INSTALL4" && printf 'WRONG-NAME\n' | ./pl-box destroy ) >/dev/null 2>&1
 docker volume inspect "$PREFIX-box4" >/dev/null 2>&1 \

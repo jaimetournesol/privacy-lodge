@@ -13,20 +13,65 @@
 //!   unreachable via docker port-publishing), and docker-compose republishes it
 //!   to the HOST's `127.0.0.1` only. Never mapped by tor.
 //!
-//! The HTTP server runs on its own thread (tiny_http, sync); a separate async
+//! The HTTP server bounds concurrency and request deadlines; a separate async
 //! task polls the admin device list to detect the phone and stop the server.
 
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tauri::AppHandle;
-use tiny_http::{Header, Method, Response, Server};
+use hyper::{Method, Response};
+use http_body_util::{BodyExt, Full, Limited};
+use bytes::Bytes;
+use hyper_util::rt::{TokioIo, TokioTimer};
+use std::convert::Infallible;
+static SETUP_WRITE: Mutex<()> = Mutex::new(());
+type HttpResponse = Response<Full<Bytes>>;
+struct SetupRequest {
+    method: Method,
+    path: String,
+    headers: hyper::HeaderMap,
+    body: String,
+    body_length: Option<usize>,
+    response: tokio::sync::oneshot::Sender<HttpResponse>,
+}
+fn http_response(code: u16, content_type: &str, body: String) -> HttpResponse {
+    Response::builder().status(code)
+        .header("Content-Type", content_type).header("Cache-Control", "no-store")
+        .header("X-Content-Type-Options", "nosniff").header("Referrer-Policy", "no-referrer")
+        .header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        .body(Full::new(Bytes::from(body))).expect("fixed response headers")
+}
+async fn http_request(req: hyper::Request<hyper::body::Incoming>, app: AppHandle, phone: Arc<AtomicBool>, csrf: String, stop: Arc<AtomicBool>) -> Result<HttpResponse, Infallible> {
+    let (parts, body) = req.into_parts();
+    let length = parts.headers.get("content-length").and_then(|s| s.to_str().ok()).and_then(|s| s.parse::<usize>().ok());
+    if parts.headers.get_all("host").iter().count() != 1 || parts.headers.get_all("content-length").iter().count() > 1 {
+        return Ok(http_response(400, "text/plain", "Invalid request headers".into()));
+    }
+    if parts.method == Method::POST && (length.is_none() || length.unwrap_or(0) > MAX_FORM_BYTES) {
+        return Ok(http_response(413, "text/plain", "Request exceeds setup limits".into()));
+    }
+    let collected = tokio::time::timeout(Duration::from_secs(10), Limited::new(body, MAX_FORM_BYTES).collect()).await;
+    let body = match collected {
+        Ok(Ok(bytes)) => match String::from_utf8(bytes.to_bytes().to_vec()) { Ok(body) => body, Err(_) => return Ok(http_response(400, "text/plain", "Invalid form encoding".into())) },
+        Ok(Err(_)) => return Ok(http_response(413, "text/plain", "Request exceeds setup limits".into())),
+        Err(_) => return Ok(http_response(408, "text/plain", "Setup request timed out".into())),
+    };
+    if stop.load(Ordering::Relaxed) { return Ok(http_response(409, "text/plain", "Reload the current setup page".into())); }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let request = SetupRequest { method: parts.method, path: parts.uri.path().into(), headers: parts.headers, body, body_length: length, response: tx };
+    tokio::task::spawn_blocking(move || handle(request, &app, &phone, &csrf));
+    Ok(rx.await.unwrap_or_else(|_| http_response(500, "text/plain", "Setup could not complete. Try again.".into())))
+}
+
 
 use crate::{commands, config, state};
 
-/// Start the setup web server (idempotent-ish: call once on first run). Returns
+static SERVER_STOP: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+const MAX_FORM_BYTES: usize = 3 * crate::backup::MAX_ENVELOPE_BYTES + 4096;
+
+/// Start the setup web server once per setup lifecycle. Returns
 /// the port it listens on. Spawns the HTTP thread + the phone-watch task.
 pub fn start(app: AppHandle) -> u16 {
     let port = config::SETUP_PORT + config::off();
@@ -36,7 +81,14 @@ pub fn start(app: AppHandle) -> u16 {
     let bind = crate::envcompat::var("SETUP_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
     let addr = format!("{bind}:{port}");
 
+    let mut active = SERVER_STOP.lock().unwrap_or_else(|e| e.into_inner());
+    if active.as_ref().is_some_and(|stop| !stop.load(Ordering::Relaxed)) {
+        return port;
+    }
     let stop = Arc::new(AtomicBool::new(false));
+    *active = Some(stop.clone());
+    drop(active);
+    let csrf: String = (0..32).map(|_| format!("{:02x}", rand::random::<u8>())).collect();
     let phone_connected = Arc::new(AtomicBool::new(false));
 
     // Phone-watch: poll the admin device list; stop the server once the phone signs in.
@@ -47,27 +99,37 @@ pub fn start(app: AppHandle) -> u16 {
         tauri::async_runtime::spawn(async move { watch_for_phone(app, stop, phone).await });
     }
 
-    // HTTP server on its own thread.
-    std::thread::spawn(move || {
-        let server = match Server::http(&addr) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("[setup] could not bind {addr}: {e}");
-                return;
-            }
-        };
-        eprintln!("[setup] setup page at http://127.0.0.1:{port}/");
-        loop {
-            if stop.load(Ordering::Relaxed) {
-                break;
-            }
-            match server.recv_timeout(Duration::from_millis(500)) {
-                Ok(Some(req)) => handle(req, &app, &phone_connected),
-                Ok(None) => continue, // timeout → re-check the stop flag
-                Err(_) => break,
+    // Bound headers, bodies and active connections independently. A slow browser
+    // must not hold the setup server's sole request worker indefinitely.
+    tauri::async_runtime::spawn(async move {
+        let mut listener = None;
+        for _ in 0..40 {
+            if stop.load(Ordering::Relaxed) { return; }
+            match tokio::net::TcpListener::bind(&addr).await {
+                Ok(bound) => { listener = Some(bound); break; }
+                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
             }
         }
-        eprintln!("[setup] setup complete — web server stopped");
+        let Some(listener) = listener else { stop.store(true, Ordering::Relaxed); eprintln!("[setup] could not bind setup listener"); return };
+        let slots = Arc::new(tokio::sync::Semaphore::new(8));
+        loop {
+            if stop.load(Ordering::Relaxed) { break; }
+            let accepted = tokio::select! {
+                accepted = listener.accept() => accepted,
+                _ = tokio::time::sleep(Duration::from_millis(100)) => continue,
+            };
+            let Ok((stream, _)) = accepted else { continue };
+            let Ok(permit) = slots.clone().try_acquire_owned() else { drop(stream); continue };
+            let app = app.clone(); let phone = phone_connected.clone(); let csrf = csrf.clone(); let stop = stop.clone();
+            tokio::spawn(async move {
+                let _permit = permit;
+                let service = hyper::service::service_fn(move |req| http_request(req, app.clone(), phone.clone(), csrf.clone(), stop.clone()));
+                let mut builder = hyper::server::conn::http1::Builder::new();
+                builder.timer(TokioTimer::new()).header_read_timeout(Duration::from_secs(5)).max_headers(32).max_buf_size(16384).keep_alive(false);
+                let _ = builder.serve_connection(TokioIo::new(stream), service).await;
+            });
+        }
+        stop.store(true, Ordering::Relaxed);
     });
 
     port
@@ -78,33 +140,63 @@ pub fn setup_url() -> String {
     format!("http://127.0.0.1:{}/", config::SETUP_PORT + config::off())
 }
 
-fn handle(req: tiny_http::Request, app: &AppHandle, phone: &Arc<AtomicBool>) {
-    let method = req.method().clone();
-    let path = req.url().split('?').next().unwrap_or("/").to_string();
-    match (method, path.as_str()) {
-        (Method::Get, "/") => respond(req, 200, "text/html; charset=utf-8", PAGE.to_string()),
-        (Method::Get, "/status") => {
-            let body = status_json(app, phone.load(Ordering::Relaxed));
-            respond(req, 200, "application/json", body);
+fn trusted_authority(host: &str) -> bool {
+    // Docker may publish a different host port. Trust only literal loopback
+    // authorities, never substring matches or DNS names that can be rebound.
+    let Ok(url) = reqwest::Url::parse(&format!("http://{host}")) else { return false };
+    matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
+        && url.username().is_empty() && url.password().is_none()
+        && url.path() == "/" && url.query().is_none() && url.fragment().is_none()
+}
+
+fn handle(req: SetupRequest, app: &AppHandle, phone: &Arc<AtomicBool>, csrf: &str) {
+    let header = |name: &str| req.headers.get(name).and_then(|value| value.to_str().ok()).unwrap_or("");
+    let host = header("Host");
+    let origin = header("Origin");
+    if !trusted_authority(host) || (!origin.is_empty() && origin != format!("http://{host}"))
+        || header("Sec-Fetch-Site") == "cross-site" {
+        respond(req, 403, "text/plain", "Open setup using its local address.".into());
+        return;
+    }
+    let method = req.method.clone();
+    if method == Method::POST && header("X-Lodge-Setup") != csrf {
+        respond(req, 403, "text/plain", "Reload the setup page and try again.".into());
+        return;
+    }
+    if method == Method::POST && (req.body_length.is_none() || req.body_length.unwrap_or(0) > MAX_FORM_BYTES) {
+        respond(req, 413, "application/json", r#"{"error":"Setup request is too large or has no Content-Length."}"#.into());
+        return;
+    }
+    let _write = if method == Method::POST {
+        match SETUP_WRITE.try_lock() {
+            Ok(lock) => Some(lock),
+            Err(_) => { respond(req, 409, "text/plain", "Setup is already processing a request.".into()); return; }
         }
-        (Method::Post, "/provision") => provision(req, app),
-        (Method::Post, "/restore") => restore(req, app),
+    } else { None };
+    let path = req.path.split('?').next().unwrap_or("/").to_string();
+    match (method, path.as_str()) {
+        (Method::GET, "/") => respond(req, 200, "text/html; charset=utf-8", PAGE.replace("__LODGE_SETUP_CSRF__", csrf)),
+        (Method::GET, "/status") => respond(req, 200, "application/json", status_json(app, phone.load(Ordering::Relaxed))),
+        (Method::POST, "/provision") => provision(req, app),
+        (Method::POST, "/restore") => restore(req, app),
         _ => respond(req, 404, "text/plain", "not found".to_string()),
     }
 }
 
-fn respond(req: tiny_http::Request, code: u16, content_type: &str, body: String) {
-    let header = Header::from_bytes(&b"Content-Type"[..], content_type.as_bytes())
-        .expect("valid header");
-    let resp = Response::from_string(body)
-        .with_status_code(code)
-        .with_header(header);
-    let _ = req.respond(resp);
+fn read_form(req: &mut SetupRequest) -> Result<String, String> {
+    Ok(std::mem::take(&mut req.body))
+}
+fn respond(req: SetupRequest, code: u16, content_type: &str, body: String) {
+    let _ = req.response.send(http_response(code, content_type, body));
+}
+pub fn restart(app: AppHandle) {
+    if let Some(stop) = SERVER_STOP.lock().unwrap_or_else(|e| e.into_inner()).take() { stop.store(true, Ordering::Relaxed); }
+    start(app);
 }
 
 fn status_json(app: &AppHandle, phone_connected: bool) -> String {
-    let (phase, onion, stage, username) =
-        state::read(app, |i| (i.phase, i.onion.clone(), i.setup_stage, i.username.clone()));
+    let (phase, onion, stage, username, error) =
+        state::read(app, |i| (i.phase, i.onion.clone(), i.setup_stage, i.username.clone(), i.error.clone()));
     let qr = if onion.is_some() {
         commands::get_connect_qr(app.clone()).ok()
     } else {
@@ -112,6 +204,7 @@ fn status_json(app: &AppHandle, phone_connected: bool) -> String {
     };
     serde_json::json!({
         "phase": phase,
+        "error": error,
         "stage": stage,
         "onion": onion,
         "username": username,
@@ -123,9 +216,11 @@ fn status_json(app: &AppHandle, phone_connected: bool) -> String {
 }
 
 /// Handle POST /provision: parse the form, provision (once), respond.
-fn provision(mut req: tiny_http::Request, app: &AppHandle) {
-    let mut body = String::new();
-    let _ = req.as_reader().read_to_string(&mut body);
+fn provision(mut req: SetupRequest, app: &AppHandle) {
+    let body = match read_form(&mut req) {
+        Ok(body) => body,
+        Err(error) => { respond(req, 400, "application/json", serde_json::json!({"error": error}).to_string()); return; }
+    };
     let form = parse_form(&body);
     let username = form.get("username").cloned().unwrap_or_default();
     let password = form.get("password").cloned().unwrap_or_default();
@@ -150,9 +245,11 @@ fn provision(mut req: tiny_http::Request, app: &AppHandle) {
 
 /// Handle POST /restore (feature D): rebuild this box from an encrypted backup instead of
 /// creating a new one. On success the box boots on the SAME .onion with the same admin login.
-fn restore(mut req: tiny_http::Request, app: &AppHandle) {
-    let mut body = String::new();
-    let _ = req.as_reader().read_to_string(&mut body);
+fn restore(mut req: SetupRequest, app: &AppHandle) {
+    let body = match read_form(&mut req) {
+        Ok(body) => body,
+        Err(error) => { respond(req, 400, "application/json", serde_json::json!({"error": error}).to_string()); return; }
+    };
     let form = parse_form(&body);
     let envelope = form.get("envelope").cloned().unwrap_or_default();
     let passphrase = form.get("passphrase").cloned().unwrap_or_default();
@@ -210,19 +307,6 @@ async fn watch_for_phone(app: AppHandle, stop: Arc<AtomicBool>, phone: Arc<Atomi
         break;
     }
 
-    // Let the box's own pairing-sync login settle so its device is in the baseline
-    // (the user is reading the QR / grabbing their phone anyway).
-    tokio::time::sleep(Duration::from_secs(15)).await;
-
-    // Baseline the current device set (box's own logins). Any device beyond this
-    // set — other than our own poll device — is the phone.
-    let mut baseline: HashSet<String> = HashSet::new();
-    if let Some(t) = &token {
-        if let Some(ids) = device_ids(&client, &base, t).await {
-            baseline = ids.into_iter().collect();
-        }
-    }
-
     loop {
         if stop.load(Ordering::Relaxed) {
             return;
@@ -233,7 +317,7 @@ async fn watch_for_phone(app: AppHandle, stop: Arc<AtomicBool>, phone: Arc<Atomi
         match device_ids(&client, &base, &t).await {
             Some(ids) => {
                 let mine = my_device.clone().unwrap_or_default();
-                let phone_here = ids.iter().any(|id| *id != mine && !baseline.contains(id));
+                let phone_here = ids.iter().any(|id| *id != mine && id != "LODGE_SERVICE");
                 if phone_here {
                     phone.store(true, Ordering::Relaxed);
                     // Let the page poll once more and show "connected", then stop.
@@ -245,9 +329,6 @@ async fn watch_for_phone(app: AppHandle, stop: Arc<AtomicBool>, phone: Arc<Atomi
             None => {
                 // Token likely rejected → re-login (a new device of our own); fold the
                 // old one into the baseline so it isn't mistaken for the phone.
-                if let Some(m) = my_device.take() {
-                    baseline.insert(m);
-                }
                 if let Some((nt, nd)) = admin_login(&client, &base, &user, &pass).await {
                     token = Some(nt);
                     my_device = Some(nd);
@@ -270,6 +351,8 @@ async fn admin_login(
             "type": "m.login.password",
             "identifier": { "type": "m.id.user", "user": user },
             "password": pass,
+            "device_id": "LODGE_SETUP",
+            "initial_device_display_name": "Privacy Lodge setup",
         }))
         .send()
         .await
@@ -355,3 +438,13 @@ fn hex_val(b: u8) -> Option<u8> {
 /// The single self-contained setup page (inline CSS + JS). Talks to /status and
 /// /provision on the same origin. Branded to match the app (Ink + Sunflower).
 const PAGE: &str = include_str!("setup_page.html");
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    #[test]
+    fn setup_authority_accepts_only_literal_loopback() {
+        for host in ["127.0.0.1:8470", "localhost:9999", "[::1]:8470"] { assert!(trusted_authority(host), "{host}"); }
+        for host in ["evil.example", "127.0.0.1.evil.example", "localhost@evil.example", "evil@localhost", "localhost/path", "localhost#fragment", "0.0.0.0:8470"] { assert!(!trusted_authority(host), "{host}"); }
+    }
+}

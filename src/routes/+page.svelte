@@ -41,7 +41,7 @@
 {#if view === "loading"}
   <div class="splash">
     <Wordmark size="lg" />
-    <p class="dim">Checking your box…</p>
+    <p class="dim">Checking Lodge…</p>
   </div>
 {:else if view === "browser-setup"}
   <div class="onboard">

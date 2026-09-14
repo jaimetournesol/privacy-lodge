@@ -377,7 +377,7 @@ pub async fn session_new(
     let name = if title.is_empty() { "New conversation" } else { title };
     let room = create_room(client, base, owner_token, agent_user, name)
         .await
-        .ok_or("couldn't create the conversation on your box")?;
+        .ok_or("couldn't create the conversation on Lodge")?;
 
     let mut all = read_sessions(client, sessions_url, owner_token).await;
     let list = all
@@ -436,7 +436,7 @@ pub async fn session_delete(
     if gone {
         Ok("Conversation deleted.".into())
     } else {
-        Err("couldn't delete that conversation on your box".into())
+        Err("couldn't delete that conversation on Lodge".into())
     }
 }
 
@@ -545,7 +545,7 @@ pub async fn publish_registry(
                 "description": if a.leftover {
                     "Left over from a deleted agent — remove it to clear the chat"
                 } else {
-                    "Runs on your box"
+                    "Runs on Lodge"
                 },
                 "room_id": a.room_id,
             })
@@ -557,7 +557,7 @@ pub async fn publish_registry(
     // In the container PRIVACY_LODGE_DATA_DIR=/data, so the agent hidden service's hostname
     // lands here. Empty until tor has minted it (first boot after this port was added).
     let webui_onion = std::fs::read_to_string(
-        std::path::Path::new(&crate::envcompat::var("DATA_DIR").unwrap_or("/data".into()))
+        crate::agentnode_runtime::base()
             .join("data/tor/hs-agent/hostname"),
     )
     .map(|s| s.trim().to_string())
@@ -571,7 +571,8 @@ pub async fn publish_registry(
     // password file, the homeserver, and the agent — and reading it needs the owner's own
     // access token over the onion. What it buys is that the password is a genuine second
     // gate on a shell-capable UI instead of a value only the container knows.
-    let webui_password = std::fs::read_to_string(HANDOFF_WEBUI_PASSWORD)
+    let is_agentnode = crate::agentnode_runtime::handoff().join("runtime.json").exists();
+    let webui_password = std::fs::read_to_string(if is_agentnode { crate::agentnode_runtime::handoff().join("browser-token") } else { std::path::PathBuf::from(HANDOFF_WEBUI_PASSWORD) })
         .map(|s| s.trim().to_string())
         .unwrap_or_default();
     // The phone's half of the agent onion's client-auth keypair (see
@@ -579,7 +580,7 @@ pub async fn publish_registry(
     // descriptor at all, so this key IS the app's access to Agent settings — it has to
     // travel with the address it unlocks.
     let webui_auth_key = std::fs::read_to_string(
-        std::path::Path::new(&crate::envcompat::var("DATA_DIR").unwrap_or("/data".into()))
+        crate::agentnode_runtime::base()
             .join("data/tor/agent-client-auth.key"),
     )
     .map(|s| s.trim().to_string())
@@ -589,6 +590,8 @@ pub async fn publish_registry(
         .bearer_auth(owner_token)
         .json(&json!({
             "agents": list,
+            "backend": if is_agentnode { "agentnode" } else { "legacy" },
+            "provider": if is_agentnode { "codex" } else { "" },
             "webui_onion": webui_onion,
             "webui_port": crate::config::AGENT_WEBUI_ONION_PORT,
             "webui_password": webui_password,
@@ -722,7 +725,10 @@ pub async fn republish_from_handoff(
         }
     }
     if user_ids.is_empty() {
-        return; // no agent provisioned (or the add-on isn't installed) — nothing to say
+        if crate::agentnode_runtime::handoff().join("runtime.json").exists() {
+            let _ = publish_registry(client, registry_url, owner_token, &[]).await;
+        }
+        return;
     }
     // Keep whatever the current roster says about each agent (room id, group, name) so a
     // republish never clobbers detail we already published.

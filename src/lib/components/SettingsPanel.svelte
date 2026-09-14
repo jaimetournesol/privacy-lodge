@@ -4,7 +4,7 @@
     appInfo,
     copyText,
     resetBox,
-    saveRecoveryKitHtml,
+    saveIdentityBackup,
     type AppInfo,
     type Status,
   } from "$lib/api";
@@ -16,6 +16,9 @@
   let copied = $state(false);
   let kitPath = $state("");
   let kitErr = $state("");
+  let backupPassphrase = $state("");
+  let backupConfirmation = $state("");
+  let backingUp = $state(false);
   let confirmReset = $state(false);
   let resetting = $state(false);
   let advanced = $state(false);
@@ -37,11 +40,21 @@
 
   async function saveKit() {
     kitErr = "";
+    kitPath = "";
+    if (backupPassphrase !== backupConfirmation) {
+      kitErr = "The passphrases do not match.";
+      return;
+    }
+    backingUp = true;
     try {
-      kitPath = await saveRecoveryKitHtml();
+      kitPath = await saveIdentityBackup(backupPassphrase);
+      backupPassphrase = "";
+      backupConfirmation = "";
     } catch (e) {
-      console.error("saveRecoveryKitHtml failed:", e);
+      console.error("saveIdentityBackup failed:", e);
       kitErr = mapError(e);
+    } finally {
+      backingUp = false;
     }
   }
 
@@ -63,27 +76,44 @@
   <header><h1>Settings</h1></header>
 
   <section class="card">
-    <h2>This computer is your box</h2>
+    <h2>This computer is Lodge</h2>
     <p class="dim row">
-      Your box only runs while this computer is awake. Keep it plugged in and
+      Lodge only runs while this computer is awake. Keep it plugged in and
       stop it from sleeping so the people on it can always reach you.
     </p>
   </section>
 
   <section class="card">
-    <h2>Recovery kit</h2>
-    <p class="dim row">
-      Re-save your printable recovery kit any time — keep it somewhere safe.
-    </p>
-    <div class="row actions">
-      <button class="btn btn-subtle" onclick={saveKit}>Save recovery kit</button>
-      {#if kitPath}<span class="dim ok">Saved to {kitPath}</span>{/if}
-      {#if kitErr}<span class="err">{kitErr}</span>{/if}
-    </div>
+    <h2>Your privacy boundaries</h2>
+    <p class="dim row">Lodge stores recovery material so you can recover encrypted history on another phone. Anyone with full access to this machine may also access that material. Conductor and its worker send your prompts, provided files and tool results to OpenAI using Codex.</p>
   </section>
 
   <section class="card">
-    <button class="disclosure" onclick={() => (advanced = !advanced)}>
+    <h2>Back up Lodge identity</h2>
+    <p class="dim row">
+      Save your private address, account credentials and connected boxes in an encrypted file.
+      Keep the file and its passphrase safe: both are needed to restore onto a fresh box.
+      This does not include messages or files. A full box backup includes that data.
+    </p>
+    <form class="backup-form" onsubmit={(event) => { event.preventDefault(); saveKit(); }}>
+      <div class="backup-fields">
+        <label for="backup-passphrase">Backup passphrase
+          <input class="input" id="backup-passphrase" type="password" autocomplete="new-password" minlength="8" required bind:value={backupPassphrase} />
+        </label>
+        <label for="backup-confirmation">Confirm passphrase
+          <input class="input" id="backup-confirmation" type="password" autocomplete="new-password" minlength="8" required bind:value={backupConfirmation} />
+        </label>
+      </div>
+      <div class="row actions">
+        <button class="btn btn-subtle" disabled={backingUp}>{backingUp ? "Encrypting backup…" : "Save identity backup"}</button>
+        {#if kitPath}<span class="dim ok" role="status">Saved to {kitPath}</span>{/if}
+        {#if kitErr}<span class="err" role="alert">{kitErr}</span>{/if}
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <button class="disclosure" aria-expanded={advanced} onclick={() => (advanced = !advanced)}>
       {advanced ? "▾" : "▸"} Advanced
     </button>
     {#if advanced}
@@ -104,8 +134,8 @@
       <div class="danger">
         <h3>Reset this box</h3>
         <p class="dim">
-          Permanently deletes everything — your messages, your account, and your
-          box’s address. There’s no undo, and the address can’t be recovered.
+          Deletes this box’s messages, account, address and local agent workspaces.
+          Recovery requires a backup saved elsewhere.
         </p>
         {#if !confirmReset}
           <button class="btn btn-danger" onclick={() => (confirmReset = true)}
@@ -128,7 +158,7 @@
     {/if}
   </section>
 
-  <footer class="dim foot">Privacy Lodge · {st.box_name || "your box"}</footer>
+  <footer class="dim foot">Privacy Lodge · {st.box_name || "Lodge"}</footer>
 </div>
 
 <style>
@@ -147,6 +177,11 @@
     font-size: var(--fs-sm);
     margin-top: var(--sp-2);
   }
+  .backup-form { margin-top: var(--sp-4); }
+  .backup-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sp-4); }
+  .backup-fields label { display: grid; gap: var(--sp-2); font-size: var(--fs-sm); }
+  .backup-form .actions { margin-top: var(--sp-4); }
+  @media (max-width: 720px) { .backup-fields { grid-template-columns: 1fr; } }
   .actions {
     display: flex;
     align-items: center;

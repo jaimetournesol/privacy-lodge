@@ -26,11 +26,16 @@ mkdir -p "$HERE/bin"
 # it into the bin dir, so calls work without shipping the host's DB-linked turnserver.
 for b in tor tuwunel caddy livekit-server lk-jwt-service; do
   if [ -f "$BIN_SRC/$b" ]; then cp "$BIN_SRC/$b" "$HERE/bin/$b"
-  else echo "warn: sidecar '$b' missing at $BIN_SRC (box will run without it)"; fi
+  else echo "required sidecar '$b' missing at $BIN_SRC — refusing an incomplete image" >&2; exit 1; fi
 done
 # The Expert-Bundle tor has no rpath and needs ITS libs, not whichever libevent the image's
 # base happens to ship. The supervisor sets LD_LIBRARY_PATH to <bin>/tor-libs when present.
 if [ -d "$BIN_SRC/tor-libs" ]; then cp -r "$BIN_SRC/tor-libs" "$HERE/bin/tor-libs"; fi
+# Calls load their web app from the box's onion. Without this bundle the voice
+# sidecars still start, but Caddy has no Element Call site and every call fails.
+EC_SRC="$BIN_SRC/element-call"
+[ -f "$EC_SRC/index.html" ] || { echo "no Element Call bundle at $EC_SRC — stage the sidecars before building"; exit 1; }
+cp -r "$EC_SRC" "$HERE/bin/element-call"
 # pl-crypt: `pl-box backup --encrypt` runs it FROM this image, so an installed pl-box can
 # seal/open bundles without a Rust toolchain on the host. Built alongside the app binary.
 # Hard failure, not a warning: the published image is built and pushed BY HAND from this

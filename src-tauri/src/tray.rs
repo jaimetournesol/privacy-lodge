@@ -8,7 +8,7 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, Wry};
 
-use crate::supervisor::{self, Supervisor};
+use crate::state::Phase;
 
 pub struct TrayHandles {
     status_item: Mutex<Option<MenuItem<Wry>>>,
@@ -20,7 +20,7 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
     let pause =
         MenuItem::with_id(app, "pause", "Pause box (people can't reach you)", true, None::<&str>)?;
     let quit =
-        MenuItem::with_id(app, "quit", "Quit (your box goes offline)", true, None::<&str>)?;
+        MenuItem::with_id(app, "quit", "Quit (Lodge goes offline)", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&status, &open, &pause, &quit])?;
 
     let mut builder = TrayIconBuilder::with_id("main")
@@ -34,11 +34,18 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
                     let _ = window.set_focus();
                 }
             }
-            "pause" => supervisor::stop_lifecycle(app),
-            "quit" => {
-                app.state::<Supervisor>().shutdown();
-                app.exit(0);
+            "pause" => {
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = crate::commands::stop_box(app.clone()).await {
+                        crate::state::update(&app, |inner| {
+                            inner.phase = Phase::Error;
+                            inner.error = Some(error);
+                        });
+                    }
+                });
             }
+            "quit" => app.exit(0),
             _ => {}
         });
     if let Some(icon) = app.default_window_icon() {

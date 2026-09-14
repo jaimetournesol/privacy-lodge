@@ -297,11 +297,21 @@ async fn fetch_bounded(
     if !r.status().is_success() {
         return Err(format!("update server returned {}", r.status()));
     }
-    let bytes = r.bytes().await.map_err(|e| format!("download failed: {e}"))?;
-    if bytes.len() > max {
-        return Err("update response is implausibly large — refusing".into());
+    read_bounded(r, max).await
+}
+
+async fn read_bounded(mut response: reqwest::Response, max: usize) -> Result<Vec<u8>, String> {
+    if response.content_length().is_some_and(|size| size > max as u64) {
+        return Err("Update response exceeds the size limit.".into());
     }
-    Ok(bytes.to_vec())
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| format!("download failed: {e}"))? {
+        if chunk.len() > max.saturating_sub(bytes.len()) {
+            return Err("Update response exceeds the size limit.".into());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 /// Download the native binary for this platform, verify its SHA-256 against the (already
@@ -341,7 +351,8 @@ pub async fn install_native(m: &Manifest, socks_port: u16) -> Result<std::path::
     if !r.status().is_success() {
         return Err(format!("download returned {}", r.status()));
     }
-    let bytes = r.bytes().await.map_err(|e| format!("download failed: {e}"))?;
+    let limit = if rel.size == 0 { MAX_BINARY_BYTES } else { rel.size };
+    let bytes = read_bounded(r, limit as usize).await?;
 
     // Verify size + hash against the SIGNED manifest before anything touches disk permanently.
     if rel.size > 0 && bytes.len() as u64 != rel.size {
@@ -537,7 +548,7 @@ mod tests {
 
     /// A NATIVE box whose platform has no build in the release must not be treated as Docker.
     /// Before this, `self_install == false` was read as "must be Docker", so a Windows box was
-    /// told "your box runs in Docker" and handed a `docker pull` command.
+    /// told "Lodge runs in Docker" and handed a `docker pull` command.
     #[test]
     fn native_box_without_a_build_for_its_platform_is_not_docker() {
         // Manifest carrying ONLY a linux build (exactly what we publish today).

@@ -24,19 +24,13 @@ export interface Service {
 
 export interface Status {
   phase: Phase;
+  error: string | null;
   onion: string | null;
   demo_mode: boolean;
   setup_stage: SetupStage | null;
   services: Service[];
   people_count: number;
   paired_count: number;
-  box_name: string;
-}
-
-export interface RecoveryKit {
-  phrase: string;
-  onion: string | null;
-  created: string;
   box_name: string;
 }
 
@@ -72,21 +66,9 @@ export function beginSetup(args: {
   return invoke<null>("begin_setup", args);
 }
 
-export function getRecoveryKit(): Promise<RecoveryKit> {
-  return invoke<RecoveryKit>("get_recovery_kit");
-}
-
-export function confirmRecoveryWord(args: {
-  /** 0-based index into the phrase words. */
-  index: number;
-  word: string;
-}): Promise<boolean> {
-  return invoke<boolean>("confirm_recovery_word", args);
-}
-
-/** Writes a printable HTML kit into Downloads; returns the absolute path. */
-export function saveRecoveryKitHtml(): Promise<string> {
-  return invoke<string>("save_recovery_kit_html");
+/** Saves an encrypted identity backup; does not contain message history. */
+export function saveIdentityBackup(passphrase: string): Promise<string> {
+  return invoke<string>("save_identity_backup", { passphrase });
 }
 
 export function getConnectQr(): Promise<ConnectQr> {
@@ -280,3 +262,8 @@ export async function copyText(text: string): Promise<boolean> {
     }
   }
 }
+
+export interface AgentnodeStatus { installed: boolean; conductor: boolean; worker: boolean; stage: string; error: string | null; }
+export const agentnodeStatus = () => invoke<AgentnodeStatus>("agentnode_status");
+export const installAgentnode = () => invoke<AgentnodeStatus>("install_agentnode");
+export const openConductor = () => invoke<void>("open_conductor");

@@ -30,7 +30,7 @@ export function mapError(e: unknown): string {
     s.includes("address in use") ||
     s.includes("port") && (s.includes("in use") || s.includes("already"))
   ) {
-    return "Another program is using a network port your box needs.";
+    return "Another program is using a network port Lodge needs.";
   }
 
   // The box engine (sidecar binaries) isn't installed / running on this machine.

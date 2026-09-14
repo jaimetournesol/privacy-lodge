@@ -4,9 +4,9 @@
   "version": "0.2.0",
   "identifier": "ai.tournesol.privacylodge",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm stage:agentnode && pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm stage:agentnode && pnpm build",
     "frontendDist": "../build"
   },
   "app": {
@@ -34,7 +34,8 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "sidecars/**/*"
+      "sidecars/**/*",
+      "agentnode-runtime/**/*"
     ]
   },
   "mainBinaryName": "privacy-lodge"

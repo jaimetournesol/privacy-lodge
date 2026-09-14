@@ -24,7 +24,7 @@
 #                            passphrase the file is noise — including to you, so don't lose it
 #   ./pl-box restore <file>  restore a backup (box must be down; old + encrypted both work)
 #   ./pl-box agents on|off   install / remove the optional agents add-on (separate image)
-#   ./pl-box agents ui       open the Hermes Web UI in a browser on THIS machine (tunnel)
+#   ./pl-box agents ui       open the Conductor UI in a browser on THIS machine (tunnel)
 #   ./pl-box shell           open a shell inside the container
 #   ./pl-box destroy         remove the box AND its volume (irreversible; asks first)
 #
@@ -151,12 +151,8 @@ case "$cmd" in
       # Scripted setup needs an explicit account name — there is no default.
       while [ -z "$u" ]; do read -rp "Phone login username (required): " u; done
     fi
-    # Optional add-on, chosen here so a plain install stays plain (a separate ~1.8 GB image).
-    echo
-    echo "Agents (optional): run AI agents on your box, in their own container."
-    echo "They appear in a separate 'Agents' app on your phone — never mixed into Messaging."
-    read -rp "Install agents too? [y/N] " wa
-    case "$wa" in y|Y|yes|YES) agents=1 ;; *) agents=0 ;; esac
+    echo "Conductor and a Docker worker are installed automatically. Connect Codex from the Agents screen."
+    agents=1
     key="$(openssl rand -base64 32)"
     # Unique per-install volume name, generated ONCE here and pinned in .env. Keeps two boxes
     # on one host from colliding. It must never change afterwards — it holds the onion key.
@@ -268,7 +264,7 @@ EOF
       new_box="$img"; [ -n "$ver" ] && new_box="$(image_repo "$img"):$ver"
       new_agent=""
       if agents_on; then
-        ai="$(envval PL_AGENT_IMAGE)"; [ -n "$ai" ] || ai="jaimemelon/privacy-lodge-agent:latest"
+        ai="$(envval PL_AGENT_IMAGE)"; [ -n "$ai" ] || ai="jaimemelon/privacy-lodge-agent:0.2.0"
         if is_registry_image "$ai"; then new_agent="$ai"; [ -n "$ver" ] && new_agent="$(image_repo "$ai"):$ver"; fi
       fi
       echo "→ pulling $new_box"; docker pull "$new_box" >/dev/null || die "couldn't pull $new_box — nothing changed"
@@ -309,7 +305,7 @@ EOF
     # backup into noise, which for an irreplaceable onion key is the worse failure.
     dir=""; encrypt=0
     for a in "$@"; do case "$a" in --encrypt) encrypt=1 ;; *) dir="$a" ;; esac; done
-    dir="${dir:-$HERE/backups}"; mkdir -p "$dir"
+    dir="${dir:-$HERE/backups}"; mkdir -p "$dir"; dir="$(cd "$dir" && pwd)"
     if [ "$encrypt" = 1 ]; then
       pass="${PL_BACKUP_PASSPHRASE:-}"
       if [ -z "$pass" ]; then
@@ -319,6 +315,27 @@ EOF
       fi
       [ "${#pass}" -ge 8 ] || die "passphrase must be at least 8 characters"
     fi
+    # Stop only containers using this box's volumes, then restore their prior running state.
+    # This includes both Agentnode databases and Codex credential refresh writers.
+    resume_ids=()
+    while IFS= read -r container_id; do [ -n "$container_id" ] && resume_ids+=("$container_id"); done < <(
+      for snapshot_volume in "$VOLUME" "$AGENT_VOLUME" "$HANDOFF_VOLUME" "$VOLUME-conductor" "$VOLUME-worker" "$VOLUME-agent-peer"; do
+        docker ps --filter "volume=$snapshot_volume" --format '{{.ID}}'
+      done | sort -u
+    )
+    snapshot_resume() {
+      if [ "${#resume_ids[@]}" -gt 0 ]; then
+        docker start "${resume_ids[@]}" >/dev/null || echo "Some services could not resume. Run ./pl-box up." >&2
+        resume_ids=()
+      fi
+    }
+    trap snapshot_resume EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    if [ "${#resume_ids[@]}" -gt 0 ]; then
+      echo "Pausing this box and its agents for a consistent snapshot…"
+      docker stop --timeout -1 "${resume_ids[@]}" >/dev/null
+    fi
     # A fixed-name-free stamp: caller can pass a dir; we name by the (short) onion + a counter.
     # `onion` needs the container up; a backup is BEST taken with the box down (so the sqlite
     # DBs aren't mid-write), so fall back to reading box.json straight out of the volume.
@@ -326,7 +343,7 @@ EOF
     [ -n "$o" ] || o="$(docker run --rm -v "$VOLUME":/d:ro alpine sh -c 'cat /d/box.json 2>/dev/null' 2>/dev/null \
         | sed -n 's/.*"onion"[^"]*"\([a-z2-7]*\.onion\)".*/\1/p' | head -1)"
     tag="${o%%.onion}"; tag="${tag:0:12}"; [ -n "$tag" ] || tag="box"
-    n=1; while [ -e "$dir/pl-box-$tag-$n.tgz" ]; do n=$((n+1)); done
+    n=1; while [ -e "$dir/pl-box-$tag-$n.tgz" ] || [ -e "$dir/pl-box-$tag-$n.tgz.enc" ]; do n=$((n+1)); done
     out="$dir/pl-box-$tag-$n.tgz"; base="$(basename "$out")"
     # Mount whichever agent volumes actually exist. A plain box has none and the bundle
     # simply won't contain them — restore keys off the MANIFEST, not off guesswork.
@@ -338,6 +355,10 @@ EOF
     if docker volume inspect "$HANDOFF_VOLUME" >/dev/null 2>&1; then
       mounts+=(-v "$HANDOFF_VOLUME":/v/agent-handoff:ro); have_handoff=yes
     fi
+    for member in conductor worker agent-peer; do
+      volume="$VOLUME-$member"
+      if docker volume inspect "$volume" >/dev/null 2>&1; then mounts+=(-v "$volume:/v/$member:ro"); fi
+    done
     # secrets.json in the volume is ENCRYPTED with PL_SECRETS_KEY, which lives in .env and
     # NOT in any volume. A backup without it restores an identity the box can't unlock — so
     # the key travels with the bundle. This does not widen the blast radius: the onion
@@ -347,7 +368,7 @@ EOF
     # that of its LAST command substitution, so on a plain box (no handoff volume — e.g. the
     # README's bare `docker run` install) `[ no = yes ] && echo` returned 1 and `set -e`
     # killed the script right here — silently, with no bundle written.
-    manifest="pp_backup_format=2
+    manifest="pp_backup_format=3
 created=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 onion=$o
 box_user=$user
@@ -357,19 +378,27 @@ handoff_volume=$([ "$have_handoff" = yes ] && echo "$HANDOFF_VOLUME" || true)
 secrets_key=$key"
     # One container, all volumes: build the member tars inside and emit a single bundle, so
     # there is never a half-written staging dir on the host to clean up (or leak).
-    docker run --rm "${mounts[@]}" -v "$dir":/backup -e MANIFEST="$manifest" alpine sh -c '
+    MANIFEST="$manifest" docker run --rm "${mounts[@]}" -v "$dir":/backup -e MANIFEST alpine sh -c '
       set -e
       mkdir -p /tmp/b
       printf "%s\n" "$MANIFEST" > /tmp/b/MANIFEST
       tar czf /tmp/b/box.tgz -C /v/box .
       [ -d /v/agent-data ]     && tar czf /tmp/b/agent-data.tgz     -C /v/agent-data .
       [ -d /v/agent-handoff ]  && tar czf /tmp/b/agent-handoff.tgz  -C /v/agent-handoff .
+      for member in conductor worker agent-peer; do
+        if [ -d "/v/$member" ]; then
+          # Codex recreates its temporary executable shims. Their absolute links
+          # belong to the image, not persistent agent state or credentials.
+          tar czf "/tmp/b/$member.tgz" --exclude="./agentnode/codex/tmp" -C "/v/$member" .
+        fi
+      done
       tar czf "/backup/'"$base"'" -C /tmp/b .
     ' >/dev/null
     # Written by root inside the container; hand it back and lock it down — it is, in full,
     # the keys to this box.
     docker run --rm -v "$dir":/backup -e B="$base" -e U="$(id -u):$(id -g)" alpine \
       sh -c 'chown "$U" "/backup/$B" && chmod 600 "/backup/$B"' >/dev/null
+    snapshot_resume
     if [ "$encrypt" = 1 ]; then
       # Seal, verify the seal opens, and only THEN drop the plaintext. A backup that fails
       # this check is deleted, not kept — a half-written .enc is indistinguishable from a
@@ -416,79 +445,8 @@ secrets_key=$key"
       fi
       file="$tmpdir/bundle.tgz"
     fi
-    dir="$(cd "$(dirname "$file")" && pwd)"; base="$(basename "$file")"
-    # Two formats in the wild. Backups taken before this change are a bare tar OF the box
-    # volume; new ones are a bundle with a MANIFEST at the root. Sniff, don't assume —
-    # feeding a bundle to the old path would fill /data with tarballs and produce a box
-    # that starts up with no identity at all.
-    #
-    # The sniff IS the manifest read: pulling ./MANIFEST out either yields the manifest (so
-    # it's a bundle) or nothing (so it's legacy). Deliberately not `tar tzf | grep -q` — grep
-    # closes the pipe on the first hit, tar takes SIGPIPE finishing the archive, and under
-    # `set -o pipefail` that reads as "no match" on every bundle big enough to still be
-    # decompressing. It silently misclassified every real backup.
-    man="$(docker run --rm -v "$dir":/backup:ro alpine \
-      sh -c 'tar xzf "/backup/'"$base"'" -O ./MANIFEST 2>/dev/null' || true)"
-    if [ -n "$man" ]; then fmt=bundle; else fmt=legacy; fi
-
-    if [ "$fmt" = legacy ]; then
-      docker volume create "$VOLUME" >/dev/null
-      read -rp "Restore '$base' (box identity only) INTO $VOLUME (overwrites it)? [y/N] " ans
-      [ "$ans" = "y" ] || { echo "aborted"; exit 0; }
-      docker run --rm -v "$VOLUME":/data -v "$dir":/backup alpine \
-        sh -c 'rm -rf /data/* /data/..?* 2>/dev/null; tar xzf "/backup/'"$base"'" -C /data' >/dev/null
-      echo "✓ restored into $VOLUME. Start it:  ./pl-box up"
-      echo "  note: this is an old-format backup — it does not carry the agents add-on."
-      exit 0
-    fi
-
-    mval() { printf '%s' "$man" | sed -n "s/^$1=//p" | head -1; }
-    b_onion="$(mval onion)"; b_created="$(mval created)"
-    b_agent="$(mval agent_volume)"; b_handoff="$(mval handoff_volume)"; b_key="$(mval secrets_key)"
-    echo "backup:  ${b_onion:-<no onion recorded>}"
-    echo "taken:   ${b_created:-unknown}"
-    echo "into:    $VOLUME${b_agent:+, $AGENT_VOLUME}${b_handoff:+, $HANDOFF_VOLUME}"
-    read -rp "Restore this, OVERWRITING those volumes? [y/N] " ans
-    [ "$ans" = "y" ] || { echo "aborted"; exit 0; }
-
-    # Restore each member into its volume. Members absent from the bundle are left alone
-    # rather than blanked — a plain-box backup must not wipe an agents install.
-    restore_member() {  # $1=member tar  $2=target volume
-      docker volume create "$2" >/dev/null
-      docker run --rm -v "$2":/data -v "$dir":/backup:ro -e M="$1" -e B="$base" alpine sh -c '
-        set -e
-        tar xzf "/backup/$B" -O "./$M" > /tmp/m.tgz
-        rm -rf /data/* /data/..?* 2>/dev/null || true
-        tar xzf /tmp/m.tgz -C /data' >/dev/null
-      echo "  ✓ $2"
-    }
-    restore_member box.tgz "$VOLUME"
-    [ -n "$b_agent" ]   && restore_member agent-data.tgz    "$AGENT_VOLUME"
-    [ -n "$b_handoff" ] && restore_member agent-handoff.tgz "$HANDOFF_VOLUME"
-
-    # The secrets key must match the restored secrets.json or the box comes up unable to
-    # decrypt its own state. Never silently rewrite .env — say what's wrong and ask.
-    if [ -n "$b_key" ] && [ -f "$HERE/.env" ]; then
-      cur="$(envval PL_SECRETS_KEY)"
-      if [ "$cur" != "$b_key" ]; then
-        echo
-        echo "This .env has a different PL_SECRETS_KEY than the backup. Left as-is, the box"
-        echo "will not be able to decrypt the restored secrets.json."
-        read -rp "Set PL_SECRETS_KEY in .env to the backup's key? [y/N] " ka
-        if [ "$ka" = "y" ]; then
-          cp "$HERE/.env" "$HERE/.env.bak-$(date +%s)"
-          if grep -q '^PL_SECRETS_KEY=' "$HERE/.env"; then
-            sed -i.tmp "s|^PL_SECRETS_KEY=.*|PL_SECRETS_KEY=$b_key|" "$HERE/.env" && rm -f "$HERE/.env.tmp"
-          else
-            printf 'PL_SECRETS_KEY=%s\n' "$b_key" >> "$HERE/.env"
-          fi
-          echo "  ✓ .env updated (previous copy kept alongside it)"
-        else
-          echo "  left unchanged — the box will likely fail to unlock its state."
-        fi
-      fi
-    fi
-    echo "✓ restored. Start it:  ./pl-box up"
+    command -v python3 >/dev/null || die "Python 3 is required to validate a restore safely."
+    python3 "$HERE/restore-bundle.py" "$file" "$HERE/.env"
     ;;
 
   agents)
@@ -498,13 +456,14 @@ secrets_key=$key"
         if agents_on; then echo "● agents: already installed"; exit 0; fi
         # Pull, don't lecture. This used to check for a LOCAL tag and tell the owner to run
         # a docker build — so the published agent image was never used by any normal path.
-        ai="${PL_AGENT_IMAGE:-jaimemelon/privacy-lodge-agent:latest}"
+        ai="${PL_AGENT_IMAGE:-$(envval PL_AGENT_IMAGE)}"
+        [ -n "$ai" ] || ai="jaimemelon/privacy-lodge-agent:0.2.0"
         if ! docker image inspect "$ai" >/dev/null 2>&1; then
           echo "→ getting the agent image ($ai)"
           if ! docker pull "$ai"; then
             echo "Couldn't pull the agent image. Build it from source instead:"
-            echo "    (cd agent && docker build -t privacy-lodge-agent:dev .)"
-            echo "    then add PL_AGENT_IMAGE=privacy-lodge-agent:dev to .env"
+            echo "    cd .. && pnpm stage:agentnode && docker build -f src-tauri/agentnode-runtime/docker/Dockerfile -t jaimemelon/privacy-lodge-agent:0.2.0 src-tauri/agentnode-runtime"
+            echo "    then add PL_AGENT_IMAGE=jaimemelon/privacy-lodge-agent:0.2.0 to .env"
             exit 1
           fi
         fi
@@ -519,7 +478,7 @@ secrets_key=$key"
       off)
         # Stop + remove ONLY the agent service. The agent's data volume is left alone, so
         # turning agents back on keeps its profiles, memories and skills.
-        docker compose --profile agents rm -sf agent >/dev/null 2>&1 || true
+        docker compose --profile agents rm -sf agent agent-worker >/dev/null 2>&1 || true
         if grep -q '^PL_AGENTS=' "$HERE/.env"; then
           sed -i 's/^PL_AGENTS=.*/PL_AGENTS=0/' "$HERE/.env"
         fi
@@ -534,95 +493,9 @@ secrets_key=$key"
         fi
         ;;
       ui)
-        # Open the agents' Hermes Web UI in a browser ON THIS MACHINE.
-        #
-        # The UI binds the BOX container's loopback and is published nowhere — from the
-        # phone it's reached over its own client-authorised onion. On the machine running
-        # the box there's no onion to speak of, so this bridges into that loopback.
-        #
-        # A TUNNEL, not a published port. `docker compose` could expose 8787 permanently,
-        # but that leaves a shell-capable admin UI listening for as long as the box runs,
-        # for everyone with an account on this host. This listens on 127.0.0.1 only, pipes
-        # through `docker exec` (no new container port, nothing on the LAN, nothing on the
-        # docker bridge), and is gone the moment you press Ctrl-C.
+        have_env
         agents_on || die "agents aren't installed — run './pl-box agents on' first"
-        docker ps --filter name=privacy-lodge-agent --filter status=running -q | grep -q . \
-          || die "the agent container isn't running — try './pl-box up'"
-        port="${2:-8787}"
-        pw="$(docker exec privacy-lodge-agent cat /handoff/webui-password 2>/dev/null || true)"
-        echo "Agent settings → http://127.0.0.1:${port}/"
-        [ -n "$pw" ] && echo "Password:        $pw" \
-                     || echo "Password:        (none published yet — set one from the Agents app)"
-        echo "Press Ctrl-C to close the tunnel."
-        # python3 rather than socat: socat is on neither the host nor the image, and python3
-        # is on both. Each accepted connection gets its own `docker exec` pipe.
-        python3 - "$port" <<'PY'
-import socket, subprocess, sys, threading
-port = int(sys.argv[1])
-srv = socket.socket(); srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-try:
-    srv.bind(("127.0.0.1", port))
-except OSError as e:
-    sys.exit(f"couldn't listen on 127.0.0.1:{port} — {e}")
-srv.listen(16)
-
-RELAY = (
-    "import sys,socket,threading\n"
-    "s=socket.create_connection(('127.0.0.1',8787))\n"
-    "def up():\n"
-    "    while True:\n"
-    "        b=sys.stdin.buffer.read1(65536)\n"
-    "        if not b: break\n"
-    "        s.sendall(b)\n"
-    "    s.shutdown(socket.SHUT_WR)\n"
-    "threading.Thread(target=up,daemon=True).start()\n"
-    "while True:\n"
-    "    b=s.recv(65536)\n"
-    "    if not b: break\n"
-    "    sys.stdout.buffer.write(b); sys.stdout.buffer.flush()\n"
-)
-
-def serve(conn):
-    p = subprocess.Popen(
-        ["docker", "exec", "-i", "privacy-lodge-agent", "python3", "-c", RELAY],
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-
-    def to_container():
-        try:
-            while True:
-                b = conn.recv(65536)
-                if not b: break
-                p.stdin.write(b); p.stdin.flush()
-        except Exception:
-            pass
-        finally:
-            try: p.stdin.close()
-            except Exception: pass
-
-    threading.Thread(target=to_container, daemon=True).start()
-    try:
-        while True:
-            # read1(), NOT read(): read(n) on a buffered pipe blocks until it has ALL n
-            # bytes or hits EOF, so a reply smaller than the buffer never arrives and the
-            # browser just hangs. read1() returns whatever is available now.
-            b = p.stdout.read1(65536)
-            if not b: break
-            conn.sendall(b)
-    except Exception:
-        pass
-    finally:
-        try: conn.close()
-        except Exception: pass
-        try: p.kill()
-        except Exception: pass
-
-try:
-    while True:
-        c, _ = srv.accept()
-        threading.Thread(target=serve, args=(c,), daemon=True).start()
-except KeyboardInterrupt:
-    print("\n✓ tunnel closed")
-PY
+        python3 "$HERE/agent-ui.py" "${2:-18787}"
         ;;
       *) die "usage: ./pl-box agents [on|off|status|ui [port]]" ;;
     esac

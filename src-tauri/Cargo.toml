@@ -1,5 +1,6 @@
 [package]
 name = "privacy-lodge"
+default-run = "privacy-lodge"
 version = "0.2.0"
 description = "Privacy Lodge — your own private box"
 authors = ["Tournesol"]
@@ -23,11 +24,11 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
-# One-page web setup server (feature A). Tiny synchronous HTTP/1.1 server (no
-# TLS — loopback only) that serves the first-run setup page to a browser. Runs
-# on its own thread; correct HTTP framing without hand-rolling it in fedauth style.
-tiny_http = "0.12"
 rand = "0.8"
 dirs = "6"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
@@ -59,7 +60,8 @@ zeroize = "1"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
 # Verify the ed25519 signature on an update manifest against the public key baked into this
 # binary (feature H). Pure Rust; the box only ever VERIFIES — it holds no private key.
-ed25519-dalek = "2"
+ed25519-dalek = { version = "2", features = ["hazmat"] }
+sha3 = "0.10"
 # Tor v3 client authorisation for the agent WebUI's hidden service (config.rs).
 x25519-dalek = "2"
 # Post-quantum signature for box updates (feature K). SLH-DSA (FIPS-205, formerly SPHINCS+) is
@@ -67,3 +69,6 @@ x25519-dalek = "2"
 # it the conservative choice for a long-lived trust anchor. Signatures are ~7.8 KB — irrelevant
 # for a 600-byte manifest fetched once a day. Used ALONGSIDE ed25519, never instead of it.
 fips205 = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

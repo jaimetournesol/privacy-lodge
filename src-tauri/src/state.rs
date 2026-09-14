@@ -47,6 +47,7 @@ pub struct Service {
 #[derive(Clone, Serialize)]
 pub struct Status {
     pub phase: Phase,
+    pub error: Option<String>,
     pub onion: Option<String>,
     pub demo_mode: bool,
     pub setup_stage: Option<SetupStage>,
@@ -58,6 +59,7 @@ pub struct Status {
 
 pub struct Inner {
     pub phase: Phase,
+    pub error: Option<String>,
     pub onion: Option<String>,
     pub demo_mode: bool,
     pub setup_stage: Option<SetupStage>,
@@ -102,12 +104,15 @@ pub struct Inner {
     /// isn't a standing (token-gated) registration server after setup. Persisted in
     /// box.json (non-secret). (Security review #2, 2026-07-24.)
     pub admin_created: bool,
+    /// Restore seeds the new account's pairing record before reconciliation.
+    pub restore_pairings_pending: bool,
 }
 
 impl Default for Inner {
     fn default() -> Self {
         Self {
             phase: Phase::Fresh,
+            error: None,
             onion: None,
             demo_mode: false,
             setup_stage: None,
@@ -127,6 +132,7 @@ impl Default for Inner {
             livekit_api_secret: String::new(),
             admin_password: String::new(),
             admin_created: false,
+            restore_pairings_pending: false,
         }
     }
 }
@@ -135,6 +141,7 @@ impl Inner {
     pub fn status(&self) -> Status {
         Status {
             phase: self.phase,
+            error: self.error.clone(),
             onion: self.onion.clone(),
             demo_mode: self.demo_mode,
             setup_stage: self.setup_stage,
@@ -157,9 +164,9 @@ pub struct AppState(pub Mutex<Inner>);
 fn tray_line(inner: &Inner) -> String {
     match inner.phase {
         Phase::Fresh => "Privacy Lodge — not set up yet".to_string(),
-        Phase::SettingUp => "Privacy Lodge — setting up your box…".to_string(),
+        Phase::SettingUp => "Privacy Lodge — setting up Lodge…".to_string(),
         Phase::Running => "Privacy Lodge — running, people can reach you".to_string(),
-        Phase::Stopped => "Privacy Lodge — paused, your box is offline".to_string(),
+        Phase::Stopped => "Privacy Lodge — paused, Lodge is offline".to_string(),
         Phase::Error => "Privacy Lodge — something needs attention".to_string(),
     }
 }
@@ -198,6 +205,8 @@ struct PersistedBox {
     /// off from the following start on.
     #[serde(default)]
     admin_created: bool,
+    #[serde(default)]
+    restore_pairings_pending: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -333,7 +342,7 @@ fn set_0700(path: &std::path::Path) {
 #[cfg(not(unix))]
 fn set_0700(_path: &std::path::Path) {}
 
-fn write_private(path: &std::path::Path, contents: &str) -> Result<(), String> {
+pub(crate) fn write_private(path: &std::path::Path, contents: &str) -> Result<(), String> {
     // Atomic write (review CRITICAL): write a sibling temp (created 0600 BEFORE any
     // bytes, so secrets are never briefly world-readable), fsync it, then rename(2)
     // over the target — atomic on the same filesystem. A crash / power-loss / OOM-kill
@@ -380,9 +389,13 @@ fn write_private(path: &std::path::Path, contents: &str) -> Result<(), String> {
 }
 
 /// Persist box.json + secrets.json from current state.
-pub fn persist(app: &AppHandle) -> Result<(), String> {
-    let dir = app_data_dir(app)?;
-    let (boxed, secrets) = read(app, |inner| {
+pub(crate) struct IdentitySnapshot {
+    boxed: PersistedBox,
+    secrets: PersistedSecrets,
+}
+
+pub(crate) fn identity_snapshot(inner: &Inner) -> IdentitySnapshot {
+    let (boxed, secrets) = {
         (
             PersistedBox {
                 box_name: inner.box_name.clone(),
@@ -390,6 +403,7 @@ pub fn persist(app: &AppHandle) -> Result<(), String> {
                 created: inner.created.clone(),
                 onion: inner.onion.clone(),
                 admin_created: inner.admin_created,
+                restore_pairings_pending: inner.restore_pairings_pending,
             },
             PersistedSecrets {
                 phrase: inner.phrase.clone(),
@@ -401,11 +415,13 @@ pub fn persist(app: &AppHandle) -> Result<(), String> {
                 admin_password: inner.admin_password.clone(),
             },
         )
-    });
-    write_private(
-        &dir.join("box.json"),
-        &serde_json::to_string_pretty(&boxed).map_err(|e| e.to_string())?,
-    )?;
+    };
+    IdentitySnapshot { boxed, secrets }
+}
+
+impl IdentitySnapshot {
+    pub(crate) fn documents(self) -> Result<(String, String), String> {
+    let Self { boxed, secrets } = self;
     // Encrypt the whole secrets envelope at rest (H2): the PersistedSecrets JSON —
     // admin password, recovery phrase, TURN secret, registration token, LiveKit
     // keys — is AES-256-GCM'd with a master key held outside the data dir. box.json
@@ -414,7 +430,7 @@ pub fn persist(app: &AppHandle) -> Result<(), String> {
     // they read them directly and can't decrypt — so this protects the one copy we
     // control, not the daemon configs.
     let mut plaintext = serde_json::to_string(&secrets).map_err(|e| e.to_string())?;
-    let (mut key, source) = crate::crypto::key_for_encrypt();
+    let (mut key, source) = crate::crypto::key_for_encrypt()?;
     let enc = crate::crypto::encrypt(&plaintext, &key);
     plaintext.zeroize();
     key.zeroize();
@@ -423,10 +439,16 @@ pub fn persist(app: &AppHandle) -> Result<(), String> {
         key_source: source.as_str().to_string(),
         enc: enc?,
     };
-    write_private(
-        &dir.join("secrets.json"),
-        &serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?,
-    )?;
+    Ok((serde_json::to_string_pretty(&boxed).map_err(|e| e.to_string())?,
+        serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?))
+    }
+}
+
+pub fn persist(app: &AppHandle) -> Result<(), String> {
+    let dir = app_data_dir(app)?;
+    let (boxed, secrets) = read(app, identity_snapshot).documents()?;
+    write_private(&dir.join("secrets.json"), &secrets)?;
+    write_private(&dir.join("box.json"), &boxed)?;
     Ok(())
 }
 
@@ -439,6 +461,10 @@ pub fn reset_to_fresh(app: &AppHandle) {
 /// before, so we come up in `stopped` (the user explicitly starts it).
 pub fn load_persisted(app: &AppHandle) {
     let Ok(dir) = app_data_dir(app) else { return };
+    if let Err(error) = crate::identity_transaction::recover(&dir) {
+        update(app, |inner| { inner.phase = Phase::Error; inner.error = Some(error); });
+        return;
+    }
     let Ok(raw) = std::fs::read_to_string(dir.join("box.json")) else { return };
     let Ok(boxed) = serde_json::from_str::<PersistedBox>(&raw) else { return };
 
@@ -460,6 +486,7 @@ pub fn load_persisted(app: &AppHandle) {
         inner.created = boxed.created;
         inner.onion = boxed.onion;
         inner.admin_created = boxed.admin_created;
+        inner.restore_pairings_pending = boxed.restore_pairings_pending;
         inner.phrase = secrets.phrase;
         inner.token = secrets.token;
         inner.turn_secret = secrets.turn_secret;

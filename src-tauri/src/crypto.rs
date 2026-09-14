@@ -15,8 +15,8 @@
 //!   2. OS keychain via `keyring` (macOS Keychain, Windows Credential Manager,
 //!      Linux secret-service) — the default for a desktop install.
 //!   3. A constant-derived fallback key — obfuscation only (anyone with the
-//!      binary can derive it), used solely so a box with neither of the above
-//!      still boots. Emits a loud warning; real protection needs (1) or (2).
+//!      binary can derive it). Read-only compatibility for old installations;
+//!      new writes require (1) or (2).
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
@@ -141,19 +141,16 @@ fn fallback_key() -> [u8; 32] {
 
 /// Resolve the master key to ENCRYPT with (get-or-create), reporting which
 /// source was used so the file records it for later decryption.
-pub fn key_for_encrypt() -> ([u8; 32], KeySource) {
-    if let Some(k) = env_key() {
-        return (k, KeySource::Env);
+pub fn key_for_encrypt() -> Result<([u8; 32], KeySource), String> {
+    match crate::envcompat::var("SECRETS_KEY") {
+        Ok(value) => return decode_key(&value)
+            .map(|key| (key, KeySource::Env))
+            .ok_or_else(|| format!("{ENV_KEY} must be base64 of exactly 32 bytes.")),
+        Err(std::env::VarError::NotUnicode(_)) => return Err(format!("{ENV_KEY} is not valid text.")),
+        Err(std::env::VarError::NotPresent) => {}
     }
-    if let Some(k) = keychain_get_or_create() {
-        return (k, KeySource::Keychain);
-    }
-    eprintln!(
-        "[privacy-lodge][crypto] WARNING: no {ENV_KEY} and no OS keychain — secrets.json is \
-         encrypted with a constant fallback key (obfuscation only, NOT secure at \
-         rest). Set {ENV_KEY} (base64 of 32 bytes) or run with a desktop keychain."
-    );
-    (fallback_key(), KeySource::Fallback)
+    keychain_get_or_create().map(|key| (key, KeySource::Keychain)).ok_or_else(||
+        format!("No secure secrets key is available. Unlock your OS keychain or set {ENV_KEY} to base64 of 32 random bytes."))
 }
 
 /// Resolve the master key to DECRYPT with, given the source recorded in the file.
