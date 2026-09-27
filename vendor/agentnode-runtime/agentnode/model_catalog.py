@@ -1,6 +1,6 @@
 """Model choices from this node's configuration, without paid discovery calls."""
 import re
-from .backends import BACKENDS, model_for
+from .backends import BACKENDS, EFFORT_LEVELS, model_for, effort_for
 
 
 def catalog(node, projects, agents):
@@ -16,6 +16,7 @@ def catalog(node, projects, agents):
                 model = item.get('model')
                 if isinstance(model, str) and model and (backend != 'opencode' or re.fullmatch(r'\S+/\S+', model)):
                     models.add(model)
-        result[backend] = {'default': default, 'models': sorted(models)}
+        result[backend] = {'default': default, 'models': sorted(models), 'efforts': list(EFFORT_LEVELS[backend]),
+                           'effort_default': effort_for(backend, node)}
     return {'backend': node.get('backend', 'claude'), 'backends': result,
             'source': 'configured', 'note': 'Configured models; provider access is not verified.'}

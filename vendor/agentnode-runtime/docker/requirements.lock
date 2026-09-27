@@ -34,3 +34,6 @@ uvicorn==0.52.4
 uvloop==0.22.1
 watchfiles==1.2.0
 websockets==17.1
+
+PySocks==1.7.1
+python-socks[asyncio]==2.7.2

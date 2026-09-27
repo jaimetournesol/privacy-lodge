@@ -16,6 +16,8 @@ def main():
     env = dict(os.environ, SURFACE_DIR=str(surface), HUB_PORT=str(n['hub_port']), HUB_TLS_PORT=str(n['hub_tls_port']),
                SURFACE_AGENT_URL=f"http://127.0.0.1:{n['port']}", SURFACE_MODEL=str(n['model']),
                SURFACE_AUTH_TOKEN=n['token'], SURFACE_AGENT='external', HUB_HOST='0.0.0.0', NODE_ENV='production')
+    if n.get('surface_state_dir'):
+        env['SURFACE_STATE_DIR'] = str(Path(n['surface_state_dir']).expanduser())  # writable state beside a read-only install
     if n.get('lodge'):
         env.update(LODGE_MODE='1', CODEX_HOME=str(config.HOME / 'codex'), AGENTNODE_TOKEN=n['token'])
     if (config.TLS / 'cert.pem').exists() and (config.TLS / 'key.pem').exists():

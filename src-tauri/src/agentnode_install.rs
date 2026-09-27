@@ -98,6 +98,7 @@ impl Runtime {
                 args.extend(["-v".into(), format!("{}:/handoff/agentnode", self.handoff().to_string_lossy()),
                     "-p".into(), format!("127.0.0.1:{}:8787", 8787 + self.offset)]);
                 for slot in 0..=16 { args.extend(["-p".into(), format!("127.0.0.1:{}:{}", 4400 + slot + self.offset, 4400 + slot)]); }
+                for slot in 1..=16 { args.extend(["-p".into(), format!("127.0.0.1:{}:{}", 8900 + slot + self.offset, 8900 + slot)]); }
             }
             args.push(image.clone());
             docker_owned(args).await?;

@@ -57,6 +57,7 @@ class ProjectSession:
         self.context: list[dict] = []
         self.hub_ok = False
         self.last_result: dict | None = None
+        self.last_exit: dict | None = None    # {rc, stderr, ts} of the most recent process exit
         self.turn_done = asyncio.Event()
         self._fail_count = 0
         self.agents: list[dict] = []
@@ -149,6 +150,11 @@ class ProjectSession:
         from .backends import model_for
         return model_for(self.backend, self.node, self.project, self.agent)
 
+    @property
+    def reasoning_effort(self):
+        from .backends import effort_for
+        return effort_for(self.backend, self.node, self.project, self.agent)
+
     def list_agents(self) -> list[dict]:
         return [{**a, "approval":policy.approval(a,self.project), "active": a["id"] == self.active_id} for a in self.agents]
 
@@ -185,30 +191,34 @@ class ProjectSession:
             out.append({"session_id": sid, "mtime": f.stat().st_mtime, "size": f.stat().st_size, "first": first[:160], "known": sid in known})
         return out
 
-    async def new_agent(self, name: str | None = None, session_id: str | None = None, backend=None, model=None):
+    async def new_agent(self, name: str | None = None, session_id: str | None = None, backend=None, model=None, reasoning_effort=None):
         async with self.restart_lock:
             policy.check_mutation()
-            aid = self._add_agent(name, session_id, backend, model)
+            aid = self._add_agent(name, session_id, backend, model, reasoning_effort)
             a=next(a for a in self.agents if a['id']==aid)
             a['approval']='pending'
             self._save_state()
             self.broadcast_status()
             return a
 
-    def _add_agent(self, name=None, session_id=None, backend=None, model=None):
-        from .backends import validate_backend, model_for
+    def _add_agent(self, name=None, session_id=None, backend=None, model=None, reasoning_effort=None):
+        from .backends import validate_backend, model_for, effort_for, validate_effort
         chosen = validate_backend(backend or self.backend)
         chosen_model = model or (self.model if chosen == self.backend else model_for(chosen, self.node))
         model_for(chosen, self.node, agent={'backend': chosen, 'model': chosen_model})
-        if session_id and (chosen != 'claude' or self.backend != 'claude'):
-            raise ValueError('Switch to a saved Claude agent before importing a Claude session.')
+        # An explicit agent effort is inherited within the same CLI; project/node defaults keep applying dynamically.
+        effort = reasoning_effort or (self.agent.get('reasoning_effort') if chosen == self.backend else None) or None
+        effective_effort = effort_for(chosen, self.node, self.project, {'backend': chosen, 'reasoning_effort': effort})
+        validate_effort(chosen, effective_effort, chosen_model, self.node)
+        # A session ID belongs to the new agent's own CLI (a Claude archive, a Codex thread, an
+        # OpenCode session); the active agent's CLI is irrelevant. A mismatched ID fails visibly on resume.
         base = config.slug(name or time.strftime("agent-%Y%m%d-%H%M"))
         aid = base
         n = 2
         while any(a["id"] == aid for a in self.agents):
             aid = f"{base}-{n}"
             n += 1
-        self.agents.append({"id": aid, "name": name or aid, "backend": chosen, "model": chosen_model,
+        self.agents.append({"id": aid, "name": name or aid, "backend": chosen, "model": chosen_model, "reasoning_effort": effort,
                             "session_id": session_id, "total_cost": 0.0, "history_file": None,
                             "surface_ws": None, "created": time.time(), "last_used": time.time()})
         return aid
@@ -244,6 +254,34 @@ class ProjectSession:
             if a["id"] == aid:
                 a["name"] = name
         self._save_state()
+
+    def set_session(self, aid: str, session_id):
+        """Supported write path for a saved agent's CLI session identity.
+
+        agents.json is rewritten from memory on every save (including clean shutdown), so an
+        out-of-band edit of the file under a running service is lost; use this instead.
+        """
+        return self.update_agent_identity(aid, {'session_id': session_id})
+
+    def update_agent_identity(self, aid: str, changes: dict):
+        """Validate a combined rename/session edit before changing memory or saving."""
+        policy.check_mutation()
+        target = next((a for a in self.agents if a["id"] == aid), None)
+        if not target:
+            raise ValueError('unknown agent')
+        updates = {}
+        if 'session_id' in changes:
+            updates['session_id'] = (changes['session_id'] or '').strip() or None
+            if aid == self.active_id and (self.desired_running or (self.proc and self.proc.poll() is None)):
+                raise policy.PolicyError('Stop the active agent before changing its session; the running process resumes the old one', 409)
+        if 'name' in changes:
+            updates['name'] = str(changes['name'] or '').strip() or aid
+        target.update(updates)
+        if aid == self.active_id and 'session_id' in updates:
+            self.session_id = updates['session_id']
+        self._save_state()
+        self.broadcast_status()
+        return target
 
     async def delete_agent(self, aid: str):
         policy.check_mutation()
@@ -296,7 +334,10 @@ class ProjectSession:
         # conductor tools (control node's orchestrator only)
         if self.project.get("conductor") and self.node.get("control"):
             mcps["conductor"] = {"command": py, "args": [str(mcpdir / "conductor_mcp.py")], "env": env_common}
-        from .mcp_config import validate_servers, RESERVED
+        from .mcp_config import validate_servers, shared_servers, validate_disabled_servers, RESERVED
+        from .tag_integration import servers as tag_servers
+        mcps.update(tag_servers())
+        mcps.update(shared_servers(config.HOME / 'mcp.json'))
         own_path = Path(self.project['dir']) / '.mcp.json'
         if own_path.exists():
             own = json.loads(own_path.read_text()).get('mcpServers', {})
@@ -309,6 +350,8 @@ class ProjectSession:
         if RESERVED.intersection(extra):
             raise ValueError('host, surface, voice and conductor are reserved MCP roles')
         mcps.update(extra)
+        for name in validate_disabled_servers(self.project.get('disabled_mcps', [])):
+            mcps.pop(name, None)
         if self.backend == 'claude' and self.node.get('claude_oauth_token_file'):
             # Locally launched MCPs do not need the parent Claude login token.
             # Preserve an explicit credential configured for a custom MCP.
@@ -322,11 +365,14 @@ class ProjectSession:
     def fleet_primer(self) -> str:
         from .agent_contract import render
         servers = json.loads(self.mcp_config_path().read_text())['mcpServers']
-        return render(self, servers)
+        from .tag_integration import guidance
+        return render(self, servers) + (guidance() if 'tag' in servers else '')
 
     def cmd(self) -> list[str]:
-        from .backends import binary_for, validate_backend
+        from .backends import binary_for, validate_backend, validate_effort
         validate_backend(self.backend)
+        # Pass the effective saved override or backend effort default to the CLI.
+        effort = validate_effort(self.backend, self.reasoning_effort, self.model, self.node)
         if self.backend in ('codex', 'opencode'):
             import sys
             c = [self.node.get('python') or sys.executable, str(config.REPO / ('agentnode/' + self.backend + '_bridge.py')),
@@ -336,6 +382,8 @@ class ProjectSession:
                 c.append('--container-sandbox')
             if self.project.get(self.backend + '_yolo', self.node.get(self.backend + '_yolo', False)):
                 c.append('--yolo')
+            if effort:
+                c += ['--reasoning-effort', effort]
             if self.session_id:
                 c += ['--resume', self.session_id]
             return c
@@ -343,6 +391,8 @@ class ProjectSession:
              "--verbose", "--include-partial-messages", "--model", self.model,
              "--dangerously-skip-permissions", "--mcp-config", str(self.mcp_config_path()), "--strict-mcp-config",
              "--append-system-prompt", self.fleet_primer()]
+        if effort:
+            c += ["--effort", effort]
         if self.session_id:
             c += ["--resume", self.session_id]
         return c
@@ -370,7 +420,10 @@ class ProjectSession:
         self.generation += 1
         generation = self.generation
         self._save_state()
-        stderr = private_file(self.data / 'logs' / (self.backend + '-stderr.log')).open('ab')
+        stderr_path = private_file(self.data / 'logs' / (self.backend + '-stderr.log'))
+        stderr = stderr_path.open('ab')
+        stderr.seek(0, 2)
+        self._stderr_mark = (stderr_path, stderr.tell())
         env = dict(os.environ)
         env.pop('CLAUDECODE', None)
         env['PWD'] = str(Path(self.project['dir']).resolve())
@@ -413,24 +466,45 @@ class ProjectSession:
         async with self.restart_lock:
             await self._on_exit(rc, generation)
 
+    def _stderr_tail(self, limit=600):
+        """Last lines the exited process wrote to its private stderr log, for the failure result."""
+        mark = getattr(self, '_stderr_mark', None)
+        if not mark: return ''
+        path, offset = mark
+        try:
+            with path.open('rb') as f:
+                f.seek(0, 2)
+                start = max(offset, f.tell() - 8192)
+                f.seek(start)
+                text = f.read().decode('utf-8', 'replace')
+        except OSError:
+            return ''
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return '\n'.join(lines[-4:])[-limit:]
+
     async def _on_exit(self, rc, generation=None):
         if generation is not None and generation != self.generation: return
         if self.proc and self.proc.stdin: self.proc.stdin.close()
         self.proc = None
         self.status = 'stopped'
         self.current_tool = None
+        stderr = self._stderr_tail()
+        # Keep the child's own explanation next to the exit code: a launch guard, a missing
+        # binary or a CLI argument error would otherwise all read as an opaque crash.
+        self.last_exit = {'rc': rc, 'stderr': stderr, 'ts': time.time()}
+        detail = f'Agent process exited ({rc}); inspect its work before retrying.' + (f' Last stderr: {stderr}' if stderr else '')
         if self.current_turn:
-            self._finish_turn({'type':'result','subtype':'process_exit','is_error':True,
-                              'result':f'Agent process exited ({rc}); inspect its work before retrying.'})
+            self._finish_turn({'type':'result','subtype':'process_exit','is_error':True,'result':detail})
         self.turn_done.set()
-        await self.broadcast({'type':'bridge','subtype':'process_exit','rc':rc,'ts':time.time()})
+        await self.broadcast({'type':'bridge','subtype':'process_exit','rc':rc,'stderr':stderr,'ts':time.time()})
         self.broadcast_status()
         if self.stop_requested or not self.desired_running: return
         self._fail_count += 1
         if self._fail_count >= 5:
             self.desired_running = False
             self._save_state()
-            await self.broadcast({'type':'bridge','subtype':'error','text':'Agent repeatedly exited; automatic restart paused. Existing session retained.'})
+            await self.broadcast({'type':'bridge','subtype':'error','text':'Agent repeatedly exited; automatic restart paused. Existing session retained.'
+                                  + (f' Last stderr: {stderr}' if stderr else '')})
             return
         async def retry():
             await asyncio.sleep(min(30, 2 ** self._fail_count))
@@ -735,7 +809,7 @@ class ProjectSession:
             if require_running:raise DeliveryError('The agent stopped before this message could be delivered')
             self._start()
         request_source,response_channel=channels(request_source,voice,response_channel)
-        ev = {"type": kind, "text": text, "ts": time.time(), 'request_source':request_source,'response_channel':response_channel,'turn_id':self.current_turn,'voice_target':(voice or {}).get('client_id')}
+        ev = {"type": kind, "origin": origin, "text": text, "ts": time.time(), 'request_source':request_source,'response_channel':response_channel,'turn_id':self.current_turn,'voice_target':(voice or {}).get('client_id')}
         if origin:
             ev["origin"] = origin
         if annotations:
@@ -820,9 +894,10 @@ class ProjectSession:
                 "agent": self.active_id, "agent_name": self.agent.get("name"), "agents": len(self.agents),
                 "turn_id": self.current_turn, "queued": sum(t['status']=='queued' for t in self.ledger.items.values()),
                 "tool": self.current_tool, "session_id": self.session_id, "cost": round(self.total_cost, 4),
-                "model": self.model, "approval": policy.approval(self.agent, self.project),
+                "model": self.model, "reasoning_effort": self.reasoning_effort, "approval": policy.approval(self.agent, self.project),
                 "backend": self.backend, "alive": bool(self.proc and self.proc.poll() is None), "running": self.desired_running,
                 "surface_ws": self.surface_ws, "hub_ok": self.hub_ok, "pending_context": len(self.context),
+                "last_exit": self.last_exit,
                 "turn_started": getattr(self, "turn_started", None) if self.status == "working" else None,
                 "ts": time.time()}
 

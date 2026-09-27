@@ -50,9 +50,15 @@ export function useSurface(): Surface {
     let dead = false;
     let retryMs = 500;
     let timer: ReturnType<typeof setTimeout>;
+    let snapshotTimer: ReturnType<typeof setTimeout>;
+    let snapshotRequest: AbortController | null = null;
+    let generation = 0;
 
     const connect = () => {
       if (dead) return;
+      const current=++generation;
+      clearTimeout(snapshotTimer);
+      snapshotRequest?.abort();
       setStatus('connecting');
       // ?ws=<id> pins the workspace (used by embed mode); otherwise the last one viewed.
       let last = new URLSearchParams(location.search).get('ws') ?? '';
@@ -66,13 +72,32 @@ export function useSurface(): Surface {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${proto}://${location.host}/ws?ws=${encodeURIComponent(last)}&access=${encodeURIComponent(ACCESS)}&view=${VIEW_MODE}&presentation=${encodeURIComponent(PRESENTATION_SCOPE)}`);
       wsRef.current = ws;
+      let receivedSnapshot=false;
+      const loadSnapshot=async()=>{
+        if(dead||current!==generation||receivedSnapshot)return;
+        const controller=new AbortController();snapshotRequest=controller;
+        const timeout=setTimeout(()=>controller.abort(),10000);
+        try{
+          const response=await fetch('/api/snapshot?ws='+encodeURIComponent(last),{headers:ACCESS?{'X-AgentNode-Token':ACCESS}:{},cache:'no-store',signal:controller.signal});
+          if(!response.ok)throw new Error('Snapshot unavailable');
+          const msg=await response.json() as ServerMsg;
+          if(dead||current!==generation||receivedSnapshot||msg.type!=='snapshot')return;
+          doc.current=msg.state;setWorkspace(msg.workspace);setTick(t=>t+1);
+        }catch{/* Keep retrying while the live connection is unavailable. */}
+        finally{
+          clearTimeout(timeout);
+          if(!dead&&current===generation&&!receivedSnapshot)snapshotTimer=setTimeout(loadSnapshot,5000);
+        }
+      };
+      void loadSnapshot();
 
       ws.onopen = () => {
+        if(dead||current!==generation)return;
         retryMs = 500;
-        setStatus('open');
       };
 
       ws.onmessage = (e) => {
+        if(dead||current!==generation)return;
         let msg: ServerMsg;
         try {
           msg = JSON.parse(e.data);
@@ -80,6 +105,8 @@ export function useSurface(): Surface {
           return;
         }
         if (msg.type === 'snapshot') {
+          receivedSnapshot=true;clearTimeout(snapshotTimer);snapshotRequest?.abort();
+          setStatus('open');
           doc.current = msg.state;
           setWorkspace(msg.workspace);
           setReloads({});
@@ -143,6 +170,7 @@ export function useSurface(): Surface {
       };
 
       ws.onclose = () => {
+        if(dead||current!==generation)return;
         setStatus('closed');
         if (!dead) {
           timer = setTimeout(connect, retryMs);
@@ -152,11 +180,21 @@ export function useSurface(): Surface {
       ws.onerror = () => ws.close();
     };
 
-    connect();
-    return () => {
+    const stop=()=>{
       dead = true;
       clearTimeout(timer);
-      wsRef.current?.close();
+      clearTimeout(snapshotTimer);
+      snapshotRequest?.abort();
+      wsRef.current?.close(1000,'Page closed');
+    };
+    const resume=(event:PageTransitionEvent)=>{if(event.persisted)location.reload();};
+    window.addEventListener('pagehide',stop);
+    window.addEventListener('pageshow',resume);
+    connect();
+    return () => {
+      stop();
+      window.removeEventListener('pagehide',stop);
+      window.removeEventListener('pageshow',resume);
     };
   }, []);
 

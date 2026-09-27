@@ -1,7 +1,7 @@
 FROM node:24-bookworm-slim@sha256:2fe369e969550cde8e867afc3fe370b260140cab4a23d467074295b42163d553
 LABEL ai.tournesol.privacylodge.runtime-contract="2"
 ARG CODEX_VERSION=0.154.0
-RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv git ca-certificates gosu \
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv git ca-certificates gosu tor \
     && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \

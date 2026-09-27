@@ -13,6 +13,8 @@ def render(session, servers):
              f"Project working directory: {session.project['dir']}. Use this directory for relative project files.",
              'Configured MCP servers: ' + ', '.join(sorted(servers)) + '.',
              prompt('conductor' if 'conductor' in servers else 'worker')]
+    if session.backend == 'codex':
+        parts.append(prompt('codex-models'))
     if 'host' in servers:
         parts.append('host.computer controls THIS machine. Screenshot before acting and after visible changes. '
                      'Use coordinates in the returned image dimensions, at most 1280px per edge and 256 KiB JPEG. '

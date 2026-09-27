@@ -132,17 +132,19 @@ export const TOOL_DEFS: ToolDef[] = [
   },
   {
     name: 'ui_app',
-    description: `Mount a directory you built (must contain index.html) as a live app panel. The hub serves the whole directory, injects window.surface, and HOT-RELOADS the panel whenever you edit the files — so build with Write/Edit in <workspace>/apps/<name>/ and iterate while the human watches. Use this for full apps, presentations, dashboards, interactive visualizations and design canvases. ${APP_GUIDE}`,
+    description: `Mount a static directory (path, containing index.html) OR an allowlisted running local web app (upstream, e.g. http://127.0.0.1:8801). Local apps receive X-Forwarded-Prefix and must use it for every asset/API/download URL; never embed a browser localhost URL. Upstreams must be operator-allowlisted in SURFACE_LOCAL_APP_UPSTREAMS. Set presenter_read_only only for apps whose GET/HEAD endpoints cannot change state; presenters cannot write or open WebSockets. Mount a directory you built as a live app panel. The hub serves the whole directory, injects window.surface, and HOT-RELOADS the panel whenever you edit the files — so build with Write/Edit in <workspace>/apps/<name>/ and iterate while the human watches. Use this for full apps, presentations, dashboards, interactive visualizations and design canvases. ${APP_GUIDE}`,
     inputSchema: {
       type: 'object',
       properties: {
-        path: str('App directory (absolute, or relative to the workspace)'),
+        path: str('Static app directory (absolute, or relative to the workspace); omit for upstream'),
+        upstream: str('Allowlisted loopback origin on this Surface server; mutually exclusive with path'),
+        presenter_read_only: {type:'boolean',description:'Allow presenter GET/HEAD only after verifying those routes have no write side effects; default false'},
         id: str(),
         title: str(),
         height: { type: ['number', 'string'], description: 'Panel height in px, or "fill" to take the whole visible workspace area (default 480; the human can also expand any panel to fullscreen)' },
         region,
       },
-      required: ['path'],
+      anyOf: [{required:['path']},{required:['upstream']}],
     },
   },
   {
@@ -282,6 +284,14 @@ export function createToolRunner(ctx: ToolContext) {
 
       case 'ui_app': {
         const id = (args.id as string | undefined) ?? `app-${Math.random().toString(36).slice(2, 8)}`;
+        if (!!args.upstream === !!args.path) throw new Error('Supply exactly one of path or upstream');
+        if (args.upstream) {
+          if (typeof args.upstream!=='string' || (args.presenter_read_only!==undefined && typeof args.presenter_read_only!=='boolean')) throw new Error('Invalid local application registration');
+          if (!assets.localApps) throw new Error('Local applications are unavailable on this hub');
+          const mount=assets.localApps.register(ctx.wsId,id,args.upstream,args.presenter_read_only===true);
+          const comp=store.upsertComponent({id,type:'app',title:args.title??id,region:args.region as Region|undefined,props:{...mount,height:args.height??store.getComponent(id)?.props.height}});
+          return `Local app mounted as id=${comp.id}, served at ${mount.url}. The upstream must use X-Forwarded-Prefix for routes, assets, APIs and downloads. Surface authenticates every request; no credentials are forwarded.`;
+        }
         const dir = resolvePath(String(args.path));
         const mount = assets.mountApp(dir, id, ctx.wsId);
         const comp = store.upsertComponent({

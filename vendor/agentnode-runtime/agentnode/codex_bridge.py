@@ -24,7 +24,7 @@ def toml(value):
     return json.dumps(value)
 
 
-def command(binary, model, mcp_path, primer, session_id=None, images=(), output=None, yolo=False, container_sandbox=False):
+def command(binary, model, mcp_path, primer, session_id=None, images=(), output=None, yolo=False, container_sandbox=False, effort=None):
     if container_sandbox and os.environ.get('LODGE_MODE') != '1':
         raise ValueError('Container execution is only available in a Lodge runtime')
     mcps = json.loads(Path(mcp_path).read_text())['mcpServers']
@@ -50,6 +50,10 @@ def command(binary, model, mcp_path, primer, session_id=None, images=(), output=
     # historical default may disappear from ChatGPT accounts after a rollout.
     if model != 'auto':
         cmd += ['-m', model]
+    if effort:
+        # --ignore-user-config drops ~/.codex/config.toml, so model_reasoning_effort
+        # only reaches a fresh or resumed thread as an explicit override.
+        cmd += ['-c', 'model_reasoning_effort=' + toml(effort)]
     if yolo:
         cmd += ['--dangerously-bypass-approvals-and-sandbox']
     else:
@@ -155,7 +159,8 @@ class Bridge:
                         images.append(path)
                 output = Path(temp) / 'final.txt'
                 cmd = command(self.args.binary, self.args.model, self.args.mcp_config, self.args.primer,
-                              self.session_id, images, output, self.args.yolo, self.args.container_sandbox)
+                              self.session_id, images, output, self.args.yolo, self.args.container_sandbox,
+                              self.args.reasoning_effort)
                 with self.lock:
                     if self.cancelled.is_set():
                         raise RuntimeError('Turn interrupted before launch')
@@ -238,6 +243,7 @@ def main():
     p.add_argument('--resume')
     p.add_argument('--yolo', action='store_true')
     p.add_argument('--container-sandbox', action='store_true')
+    p.add_argument('--reasoning-effort')
     Bridge(p.parse_args()).main()
 
 
