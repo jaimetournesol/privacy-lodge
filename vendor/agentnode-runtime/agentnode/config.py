@@ -42,7 +42,7 @@ DEFAULT_NODE = {
     "port": 8444,
     "tls_port": 8445,
     "token": None,
-    "model": "opus",
+    "model": "claude-opus-5-5",
     "claude_bin": None,
     "claude_oauth_token_file": None,  # optional private setup-token file; never store its value here
     "hub_port": 4400,          # Surface hub (external-agent mode) on this node

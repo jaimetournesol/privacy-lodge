@@ -2,7 +2,8 @@ fastapi
 uvicorn[standard]
 websockets==17.1; python_version >= "3.11"
 websockets==16.1.1; python_version < "3.11"
-requests
+requests[socks]
+python-socks[asyncio]>=2.7,<3
 mss
 pillow
 pyautogui

@@ -271,7 +271,7 @@ export default function App() {
             <div className="drop-box">Drop files for the agent</div>
           </div>
         )}
-        {status !== 'open' && <div className="reconnect-banner">connecting to hub…</div>}
+        {status !== 'open' && <div role="status" className="reconnect-banner">{state ? 'Content loaded · connecting live updates…' : 'Loading Surface…'}</div>}
       </div>
     );
   }

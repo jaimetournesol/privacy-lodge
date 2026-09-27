@@ -389,6 +389,10 @@ fn torrc_string(
     for slot in 0..=16 {
         let _ = writeln!(torrc, "HiddenServicePort {} 127.0.0.1:{}", 8789 + slot, 4400 + slot + o);
     }
+    // Imported agent Surfaces keep distinct browser origins, like owned workers.
+    for slot in 1..=16 {
+        let _ = writeln!(torrc, "HiddenServicePort {} 127.0.0.1:{}", 8806 + slot, 8900 + slot + o);
+    }
     torrc
 }
 
@@ -915,10 +919,12 @@ mod tests {
         let torrc = torrc_string(9150, "/d", "/d/hs", 8118, 8449, false, "/d/hs-agent");
         let lines = torrc.matches("HiddenServicePort").count();
         // 8448 + 8008 + 80 + 3478 + 5349 fixed, the agent WebUI, plus one per relay port.
-        assert_eq!(lines, 23 + relay_count());
+        assert_eq!(lines, 39 + relay_count());
         let agent_service = torrc.split("HiddenServiceDir /d/hs-agent").nth(1).unwrap();
         assert!(agent_service.contains("HiddenServicePort 8789 127.0.0.1:4400"));
         assert!(agent_service.contains("HiddenServicePort 8790 127.0.0.1:4401"));
+        assert!(agent_service.contains("HiddenServicePort 8807 127.0.0.1:8901"));
+        assert!(agent_service.contains("HiddenServicePort 8822 127.0.0.1:8916"));
         // The agent WebUI is mapped on its OWN hidden service, never on the main onion —
         // that address is shared with every paired peer box, and this port fronts an agent
         // control plane that can run shell commands.

@@ -37,18 +37,23 @@ def project_fields(body):
             body['backend'] = 'codex'
         if body.get('host_tools') is True:
             raise HTTPException(422, 'Host control is not available in Privacy Lodge.')
-    for key,limit in [('dir',4096),('name',200),('id',64),('model',100),('instructions',100000),('session_id',200)]:
+    for key,limit in [('dir',4096),('name',200),('id',64),('model',100),('instructions',100000),('session_id',200),('reasoning_effort',20)]:
         value=body.get(key)
         if value is not None and (not isinstance(value,str) or len(value)>limit):
             raise HTTPException(422,f'Invalid {key}')
     for key in ('host_tools','conductor','workspace','start','codex_yolo','opencode_yolo'):
         if key in body and not isinstance(body[key],bool):raise HTTPException(422,f'{key} must be true or false')
 
-    from .backends import validate_backend
-    from .mcp_config import validate_servers, RESERVED
+    from .backends import validate_backend, ALL_EFFORTS
+    from .mcp_config import validate_servers, validate_disabled_servers, RESERVED
+    if body.get('reasoning_effort')=='':body['reasoning_effort']=None  # a cleared form field removes the override
+    if body.get('reasoning_effort') is not None and body['reasoning_effort'] not in ALL_EFFORTS:
+        raise HTTPException(422,'reasoning_effort must be one of '+', '.join(ALL_EFFORTS))
     try:
         if body.get('backend') is not None:
             validate_backend(body['backend'])
+        if 'disabled_mcps' in body:
+            validate_disabled_servers(body['disabled_mcps'])
         if 'mcps' in body:
             extra = validate_servers(body['mcps'])
             if RESERVED.intersection(extra):

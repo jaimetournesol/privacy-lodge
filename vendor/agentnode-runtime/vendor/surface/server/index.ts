@@ -9,6 +9,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import type { ClientMsg, FileEntry, ServerMsg } from '../shared/protocol.ts';
 import { HUB_PORT } from '../shared/protocol.ts';
 import { AgentHost, SURFACE_SYSTEM_PROMPT } from './agent.ts';
+import { LocalAppHub } from './local-apps.ts';
 import { AssetHub, serveFile } from './assets.ts';
 import { OpencodeServer, llmFromEnv } from './opencode.ts';
 import { TOOL_DEFS } from './tools.ts';
@@ -72,17 +73,23 @@ function viewersOf(wsId: string): Viewport[] {
   return out;
 }
 
-function sendTo(ws: WebSocket, msg: ServerMsg): void {
-  const grant=permissions.get(ws);
-  if(grant?.exp&&grant.exp<=Date.now()/1000){ws.close(4401);return;}
+function visibleMessage(grant: Access | undefined, msg: ServerMsg): ServerMsg | null {
   if(grant?.role==='presenter'){
     if(msg.type==='workspaces')msg={...msg,items:msg.items.filter(w=>canView(grant,w.id)).map(w=>({...w,dir:''}))};
     if(msg.type==='snapshot')msg={...msg,workspace:{...msg.workspace,dir:''},state:{...msg.state,chat:[],log:[],agent:{phase:'idle',model:'',costUsd:0,turns:0}}};
     if(msg.type==='patch')msg={...msg,ops:msg.ops.filter(op=>/^\/(components|view)(\/|$)/.test(op.path))};
-    if(msg.type==='capture-request')return;
-    if(msg.type==='ws-activity'&&!canView(grant,msg.id))return;
+    if(msg.type==='capture-request')return null;
+    if(msg.type==='ws-activity'&&!canView(grant,msg.id))return null;
   }
-  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+  return msg;
+}
+
+function sendTo(ws: WebSocket, msg: ServerMsg): void {
+  const grant=permissions.get(ws);
+  if(grant?.exp&&grant.exp<=Date.now()/1000){ws.close(4401);return;}
+  const visible=visibleMessage(grant,msg);
+  if(!visible)return;
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(visible));
 }
 
 function broadcastToWs(wsId: string, msg: ServerMsg): void {
@@ -95,6 +102,10 @@ function broadcastAll(msg: ServerMsg): void {
 
 // ---- assets & workspaces ------------------------------------------------
 
+const localApps = new LocalAppHub(ROOT, (wsId, component, id) => {
+  const panel=mgr.get(wsId)?.store.getComponent(component);
+  return panel?.type==='app' && !panel.hidden && panel.props.localAppId===id;
+});
 const assets = new AssetHub(
   (wsId) => {
     const ws = mgr.get(wsId);
@@ -118,6 +129,7 @@ const assets = new AssetHub(
       file.mime.startsWith('image/') || file.mime === 'application/pdf' ? [file.path] : [],
     );
   },
+  localApps,
 );
 
 // ---- agent phase → home-screen badges & background-turn toasts ----------
@@ -231,6 +243,16 @@ const requestHandler = (req: IncomingMessage, res: ServerResponse) => {
       if(requestUrl.pathname==='/'&&req.method==='GET'){res.writeHead(200,{'Content-Type':'text/html'}).end(loginPage);return;}
       json(res,401,{error:'unauthorized'});return;
     }
+    // Initial rendering must not wait for a browser's WebSocket retry backoff.
+    // Share exactly the same workspace checks and redaction as socket snapshots.
+    if(requestUrl.pathname==='/api/snapshot'&&req.method==='GET'){
+      const id=requestUrl.searchParams.get('ws')||mgr.defaultId()||'';
+      if(!canView(grant,id)){json(res,403,{error:'Workspace access denied'});return;}
+      const workspace=mgr.info(id),ws=mgr.get(id);
+      if(!workspace||!ws){json(res,404,{error:'Workspace not found'});return;}
+      json(res,200,visibleMessage(grant,{type:'snapshot',workspace,state:ws.store.state}));return;
+    }
+    if(localApps.handle(req,res,grant))return;
     if(grant.role==='presenter'){
       const p=requestUrl.pathname;
       if(!['GET','HEAD'].includes(req.method??'')){json(res,403,{error:'Presentation is read-only'});return;}
@@ -703,8 +725,14 @@ const onConnection = (sock: WebSocket, req: IncomingMessage): void => {
   });
 };
 
-new WebSocketServer({ server, path: '/ws', verifyClient:(info:{req:IncomingMessage})=>!!access(info.req) }).on('connection', onConnection);
-if (tlsServer) new WebSocketServer({ server: tlsServer, path: '/ws', verifyClient:(info:{req:IncomingMessage})=>!!access(info.req) }).on('connection', onConnection);
+const workspaceSockets=new WebSocketServer({noServer:true});
+workspaceSockets.on('connection',onConnection);
+for (const listener of [server,tlsServer]) listener?.on('upgrade',(req,socket,head)=>{
+  const pathname=new URL(req.url??'/','http://local').pathname;
+  if(pathname.startsWith('/local-apps/')) {localApps.upgrade(req,socket,head);return;}
+  if(pathname!=='/ws'||!access(req)) {socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');return;}
+  workspaceSockets.handleUpgrade(req,socket,head,ws=>workspaceSockets.emit('connection',ws,req));
+});
 
 // ---- boot ---------------------------------------------------------------
 

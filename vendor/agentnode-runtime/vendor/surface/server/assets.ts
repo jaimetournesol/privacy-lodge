@@ -1,3 +1,4 @@
+import type { LocalAppHub } from './local-apps.ts';
 import { PRESENTATION_BRIDGE_JS } from './presentation.ts';
 import chokidar, { type FSWatcher } from 'chokidar';
 import { randomUUID } from 'node:crypto';
@@ -179,6 +180,7 @@ export class AssetHub {
     private resolveInbox: (wsId: string) => string | null,
     private onAppChange: (wsId: string, componentId: string) => void,
     private onUpload: (wsId: string, file: UploadInfo) => void,
+    readonly localApps?: LocalAppHub,
   ) {}
 
   /** Register a local file and get a stable serving URL. */

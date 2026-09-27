@@ -5,7 +5,7 @@ The upstream Agentnode repository remains private. Its repository metadata,
 Android app, tests, development tools, production deployment scripts, speech worker,
 and local state are not distributed here.
 
-Source revision: `79fa5900856f8d180996e0e164642355cdbaa8af`.
+Source revision: `adf8d9da24a78016925e70b044598e6fe5e54289`.
 
 `scripts/agentnode-runtime-files.json` is the exact allowlist and SHA-256 inventory.
 Normal builds read this snapshot and verify every file against that inventory.
@@ -21,3 +21,7 @@ library license notices remain alongside their code.
 
 The source owner authorized distribution of this runtime subset with Privacy Lodge.
 This does not grant access to, or publish, the remainder of the private repository.
+
+This snapshot adds opt-in scoped sharing between Conductors over a separate Tor onion.
+It includes the sharing registry, gateway, isolated Surface listeners and WebUI controls.
+No private deployment or fleet state is part of this refresh.

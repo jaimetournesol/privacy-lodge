@@ -40,6 +40,9 @@ def ca_file(node):
 
 
 def request(node, method, path, body=None, timeout=8):
+    if node.get('shared_id'):
+        from .sharing import peer_request
+        return peer_request(node,method,path,body,timeout)
     url=origin(node)+path
     with requests.Session() as session:
         session.trust_env=False

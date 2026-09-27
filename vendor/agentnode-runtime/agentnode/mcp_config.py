@@ -42,3 +42,29 @@ def opencode_servers(servers):
             result[name] = {'type': 'local', 'command': [spec['command'], *spec.get('args', [])],
                             'environment': spec.get('env', {}), 'enabled': True}
     return result
+
+
+def validate_disabled_servers(names):
+    if not isinstance(names, list) or any(not isinstance(n, str) or
+            not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', n) for n in names):
+        raise ValueError('disabled_mcps must be an array of MCP server names')
+    if RESERVED.intersection(names):
+        raise ValueError('Use managed role settings to disable host, surface, voice or conductor')
+    return names
+
+
+def shared_servers(path):
+    """Read trusted node defaults at launch; never expose this file via public settings."""
+    import json
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (ValueError, UnicodeError):
+        raise ValueError('Invalid shared MCP configuration JSON') from None
+    if not isinstance(data, dict) or set(data) != {'mcpServers'}:
+        raise ValueError('Shared MCP configuration must contain only mcpServers')
+    servers = validate_servers(data['mcpServers'])
+    if RESERVED.intersection(servers):
+        raise ValueError('Shared MCP configuration cannot override managed MCP roles')
+    return servers

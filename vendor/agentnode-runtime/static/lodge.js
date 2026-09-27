@@ -73,6 +73,13 @@ function lodgeSyncChat() {
   const status=lodgeUI.auth.get(chatSel?.node);
   const gate=document.getElementById('lodgeChatGate');gate.replaceChildren();
   let blocked=false;
+  const shared=sharedSelection();
+  if(shared){
+    blocked=shared.role==='observer'||!project?.alive;
+    gate.textContent=shared.role==='observer'?'Shared conversation · read-only':!project?.alive?'The owner must start this agent before it can receive messages.':'';
+    gate.hidden=!blocked;document.getElementById('btnSend').disabled=blocked;
+    document.getElementById('lodgeStop').hidden=shared.role!=='manager'||project?.status!=='working';sharedControls();return;
+  }
   if(!nodeByName(chatSel?.node)?.reachable){blocked=true;gate.append(lodgeElement('span','Machine unavailable. Your draft is saved.'),lodgeButton('Retry',()=>loadTree()));}
   else if(status!=='ready'){
     blocked=true;gate.append(lodgeElement('span',status==='unknown'?'Checking Codex connection…':'Connect Codex on '+lodgeName(chatSel?.node||'control')+' to send.'),lodgeButton('Connect',()=>lodgeOpenAccounts(chatSel?.node)));
@@ -92,7 +99,7 @@ function lodgeRenderBrowse() {
   document.getElementById('lodgeBrowseHint').textContent=node?'Workspaces keep related files and agent conversations together.':machines?'Conductor coordinates the agents running on these machines.':'Browse by machine. Opening a chat leaves running work unchanged.';
   document.getElementById('lodgeBack').hidden=!lodgeUI.machine;
   const actions=document.getElementById('lodgeBrowseActions');actions.replaceChildren();
-  actions.append(lodgeButton('Add agent',()=>lodgeAddAgent(node?.name),'primary'));
+  if(!node?.shared)actions.append(lodgeButton('Add agent',()=>lodgeAddAgent(node?.name),'primary'));
   if(machines&&!node)actions.append(lodgeButton('Connect machine',lodgeAddMachine));
   const select=document.getElementById('lodgeMachineFilter');
   if(!select.matches(':focus')){
@@ -111,17 +118,17 @@ function lodgeRenderBrowse() {
     if(machines&&!node){
       const count=projects.reduce((sum,p)=>sum+(p.agents||1),0);
       card.append(lodgeElement('p',projects.length+' workspace'+(projects.length===1?'':'s')+' · '+count+' agent'+(count===1?'':'s'),'lodge-muted'));
-      const buttons=lodgeElement('div',undefined,'lodge-actions');buttons.append(lodgeButton('View agents & chats',()=>lodgeNavigate('machines',nd.name)),lodgeButton('Add agent',()=>lodgeAddAgent(nd.name)));card.append(buttons);
+      const buttons=lodgeElement('div',undefined,'lodge-actions');buttons.append(lodgeButton('View agents & chats',()=>lodgeNavigate('machines',nd.name)));if(!nd.shared)buttons.append(lodgeButton('Add agent',()=>lodgeAddAgent(nd.name)));card.append(buttons);
     }else{
       for(const p of projects){
         const row=lodgeElement('div',undefined,'lodge-workspace');
         const info=lodgeElement('div');info.append(lodgeElement('strong',p.name),lodgeElement('span',lodgeStatus(p)+' · '+(p.agents||1)+' agent'+((p.agents||1)===1?'':'s'),'lodge-muted'));row.append(info);
         row.append(lodgeButton('Chats',()=>lodgeShowAgents(nd.name,p)));
-        if(node)row.append(lodgeButton('Add agent',()=>lodgeAddAgent(nd.name,p.id)));
+        if(node&&!nd.shared)row.append(lodgeButton('Add agent',()=>lodgeAddAgent(nd.name,p.id)));
         card.append(row);
       }
       if(!projects.length)card.append(lodgeElement('p','No workspaces yet. Add an agent to create your first one.','lodge-muted'));
-      if(node){
+      if(node&&!nd.shared){
         const buttons=lodgeElement('div',undefined,'lodge-actions');buttons.append(lodgeButton('Codex connection',()=>lodgeOpenAccounts(nd.name)));
         if(!nd.local&&nd.name!=='worker')buttons.append(lodgeButton('Disconnect machine',()=>lodgeDisconnect(nd)));
         card.append(buttons);
@@ -148,14 +155,14 @@ async function lodgeShowAgents(node, project) {
       if(!result.items?.length)list.append(lodgeElement('p','No conversations yet.'));
     }catch{list.replaceChildren();lodgeNotice(list,'Could not load conversations. Check the machine’s connection.',lodgeButton('Retry',refresh));}
   };
-  dialog.append(lodgeButton('Add agent here',()=>{dialog.close();lodgeAddAgent(node,project.id);},'primary'));dialog.showModal();await refresh();
+  if(!nodeByName(node)?.shared)dialog.append(lodgeButton('Add agent here',()=>{dialog.close();lodgeAddAgent(node,project.id);},'primary'));dialog.showModal();await refresh();
 }
 function lodgeAddAgent(selectedNode, selectedProject) {
   const dialog=lodgeDialog('Add an agent');
   dialog.append(lodgeElement('p','Choose where it works. Each agent has its own conversation; agents in the same workspace take turns using it.','lodge-muted'));
   const form=document.createElement('form');dialog.append(form);
   const machine=lodgeField(form,'1. Machine','select');
-  for(const n of tree.nodes){const option=new Option(lodgeName(n.name)+(n.reachable?'':' · offline'),n.name);option.disabled=!n.reachable;machine.add(option);}
+  for(const n of tree.nodes.filter(n=>!n.shared)){const option=new Option(lodgeName(n.name)+(n.reachable?'':' · offline'),n.name);option.disabled=!n.reachable;machine.add(option);}
   machine.value=selectedNode||tree.nodes.find(n=>n.name==='worker'&&n.reachable)?.name||tree.nodes.find(n=>n.reachable)?.name||'';
   const workspace=lodgeField(form,'2. Workspace','select');
   const folder=lodgeField(form,'Folder on this machine');folder.placeholder='/data/agentnode/projects/my-project';folder.maxLength=4096;
@@ -204,6 +211,11 @@ function lodgeManageAgent() {
   const action=(label,path,body,method='POST',close=true)=>{
     const button=lodgeButton(label,()=>lodgeRun(button,status,async()=>{await apiJson(base+path,{method,body});await loadTree();await loadAgents();if(close)dialog.close();}));actions.append(button);return button;
   };
+  if(sharedSelection()){
+    dialog.append(lodgeElement('p','Shared access: '+sharedSelection().role));
+    if(sharedSelection().role==='manager'){action('Start','/start',{expected_agent:target.agent});action('Stop work','/stop',{expected_agent:target.agent});}
+    dialog.showModal();return;
+  }
   if(a.approval!=='approved'){
     dialog.insertBefore(lodgeElement('p','Approval allows commands and file changes within this runtime. Prompts and tool results go to OpenAI. Approving does not start a task.','lodge-muted'),actions);
     action('Approve agent','/agents/'+encodeURIComponent(a.id)+'/approval',{approval:'approved'}).classList.add('primary');
@@ -242,7 +254,7 @@ function lodgeDisconnect(node) {
 async function lodgeAccounts() {
   if(lodgeUI.authBusy)return;lodgeUI.authBusy=true;
   try{
-    await Promise.allSettled(tree.nodes.map(async node=>{
+    await Promise.allSettled(tree.nodes.filter(n=>!n.shared).map(async node=>{
       try{const state=await apiJson(nodePrefix(node.name)+'/api/lodge/auth',{signal:AbortSignal.timeout(12000)});lodgeUI.auth.set(node.name,state.state);lodgeUI.auth.set(node.name+':detail',state);}
       catch{lodgeUI.auth.set(node.name,'unavailable');}
     }));
@@ -258,7 +270,7 @@ function lodgeOpenAccounts(node) {
 function lodgeRenderAccounts() {
   const root=document.querySelector('#lodgeAccountsDialog #lodgeAccounts');if(!root)return;
   const wanted=root.closest('dialog').dataset.node;
-  for(const node of tree.nodes.filter(n=>!wanted||n.name===wanted)){
+  for(const node of tree.nodes.filter(n=>!n.shared&&(!wanted||n.name===wanted))){
     const state=lodgeUI.auth.get(node.name+':detail')||{state:'unknown'},key=lodgeUI.auth.get(node.name);
     let row=[...root.children].find(el=>el.dataset.node===node.name);
     const signature=JSON.stringify({key,code:state.code});if(row?.dataset.signature===signature)continue;
@@ -347,9 +359,11 @@ function enterLodge() {
   const stageActions=lodgeElement('div',undefined,'lodge-stage-actions');
   const reset=lodgeButton('Fleet',lodgeResetStage);reset.id='lodgeResetStage';reset.title='Reset Conductor stage to Fleet';reset.setAttribute('aria-label','Reset Conductor stage to Fleet');
   const choose=lodgeButton('Choose stage',lodgeExploreStage);choose.id='lodgeChooseStage';choose.setAttribute('aria-haspopup','dialog');
-  stageActions.append(reset,choose,settings);document.querySelector('header').append(stageActions);
+  const sharing=lodgeButton('Sharing',()=>{$('#settings').classList.add('show');$('#sharingSettings').open=true;renderSharing();});
+  stageActions.append(reset,choose,sharing,settings);document.querySelector('header').append(stageActions);
   const head=document.getElementById('chatHead'),identity=lodgeElement('div',undefined,'lodge-chat-identity');
   const title=lodgeElement('strong','Conductor');title.id='lodgeChatTitle';const subtitle=lodgeElement('span');subtitle.id='lodgeChatSubtitle';identity.append(title,subtitle);
+  document.getElementById('btnShareAgent').textContent='Share';
   head.prepend(identity);head.append(lodgeButton('Manage',lodgeManageAgent));
   const stop=lodgeButton('Stop',()=>sendCmd({type:'interrupt'}));stop.id='lodgeStop';head.append(stop);
   const gate=lodgeElement('div',undefined,'lodge-chat-gate');gate.id='lodgeChatGate';gate.setAttribute('role','status');document.getElementById('composer').before(gate);

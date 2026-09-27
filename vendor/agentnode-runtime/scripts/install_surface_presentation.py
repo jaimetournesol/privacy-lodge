@@ -90,7 +90,7 @@ def install(target, build=False):
     baseline=ROOT/'vendor/surface'
     if json.loads((target/'package.json').read_text()).get('version') != json.loads((baseline/'package.json').read_text()).get('version'):
         raise RuntimeError('Unsupported Surface version; review the integration before upgrading')
-    for name in ('server/auth.ts','server/index.ts','server/state.ts','server/assets.ts','server/workspaces.ts','shared/protocol.ts','web/App.tsx','web/Workspace.tsx','web/useSurface.ts','web/registry/HtmlPanel.tsx'):
+    for name in ('server/local-apps.ts','server/tools.ts','server/auth.ts','server/index.ts','server/state.ts','server/assets.ts','server/workspaces.ts','shared/protocol.ts','web/App.tsx','web/Workspace.tsx','web/useSurface.ts','web/registry/HtmlPanel.tsx'):
         p=target/name;content=(baseline/name).read_text()
         if not p.exists() or p.read_text()!=content:updates[p]=content
     if updates:

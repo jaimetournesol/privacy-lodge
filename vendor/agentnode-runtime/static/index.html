@@ -12,6 +12,8 @@
 <script src="/static/model-picker.js"></script>
 <script src="/static/screen-control.js"></script>
 <script src="/static/history-view.js"></script>
+<script src="/static/delegations.js"></script>
+<script src="/static/sharing.js"></script>
 <script src="/static/presentation.js"></script>
 <style>
   :root {
@@ -198,8 +200,22 @@
   #stageBanner small { display: block; font-size: 11px; color: var(--cyan); letter-spacing: .18em; text-transform: uppercase; font-weight: 600; margin-bottom: 2px; }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .seg button { border: 0; border-radius: 0; padding: 5px 10px; background: var(--panel2); } .seg button.on { background: var(--accent); color: #fff; }
-  body.noscreen #presetSeg, body.noscreen #voViewSeg { display: none; }
+  body.noscreen #presetSeg [data-mode="screen"], body.noscreen #chatPresetSeg [data-mode="screen"], body.noscreen #voViewSeg { display: none; }
+  body.shared-agent #btnApproval, body.shared-agent #btnRevokeApproval, body.shared-agent #btnActivateAgent, body.shared-agent #btnAgentRename, body.shared-agent #btnNew, body.shared-agent #btnAttach { display:none !important; }
+  body.shared-agent:not(.shared-manager) #btnStartAgent, body.shared-agent:not(.shared-manager) #btnRestart, body.shared-agent:not(.shared-manager) #btnInterrupt { display:none !important; }
+  body.shared-observer #composer { display:none !important; }
+  #sharedAgentNote { padding:8px 12px; font-size:12px; color:var(--muted); border-bottom:1px solid var(--border); }
+  #shareAgentDialog { background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:12px; max-width:540px; width:90vw; }
+  #shareAgentDialog label { display:block; margin:12px 0; }
+  #shareAgentDialog textarea, #sharingCode { width:100%; min-height:72px; }
   /* ---- chat ---- */
+  #chatViewBar { display:none; align-items:center; gap:10px; padding:6px 12px; border-bottom:1px solid var(--border); }
+  body.chatwide:not(.mobile):not(.voicemode):not(.projection):not(.lodge) main { grid-template-columns:220px minmax(0,1fr); }
+  body.chatwide.noside:not(.mobile):not(.voicemode):not(.projection):not(.lodge) main { grid-template-columns:minmax(0,1fr); }
+  body.chatwide:not(.mobile):not(.voicemode):not(.projection):not(.lodge) #left { display:none; }
+  body.chatwide:not(.mobile):not(.voicemode):not(.projection):not(.lodge) #chatPane { display:flex; min-width:0; }
+  body.chatwide:not(.mobile):not(.voicemode):not(.projection):not(.lodge) #chatViewBar { display:flex; }
+  @media(max-width:1000px) { body.chatwide:not(.mobile):not(.voicemode):not(.projection):not(.lodge) main { grid-template-columns:minmax(0,1fr); } }
   #chatPane { display: flex; flex-direction: column; border-left: 1px solid var(--border); background: rgba(12,14,19,.6); backdrop-filter: blur(10px); min-height: 0; position: relative; }
   #chatHead { display: flex; flex-wrap:wrap; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
   #chatHead .who { font-weight: 600; } #chatHead .where { color: var(--muted); }
@@ -384,7 +400,7 @@
   <div id="left">
     <div id="stageSessionBar"><span id="stageOutputLabel">Conductor Stage</span><button id="btnPublishView">Show in presentation</button><button id="btnEditPresentation" aria-pressed="false">Control presentation</button><button id="stageReset">Reset Stage</button></div><div id="stageBar">
       <span class="muted">Stage</span> <span id="stageWhere" class="pill">—</span>
-      <span class="seg" id="presetSeg" title="layout for the selected project"><button data-mode="both">Both</button><button data-mode="screen">Screen</button><button data-mode="surface">Surface</button></span>
+      <span class="seg" id="presetSeg" title="Choose a view; click the active view again to expand chat"><button data-mode="both">Both</button><button data-mode="screen">Screen</button><button data-mode="surface">Surface</button></span>
       <button class="small" id="btnPin" title="keep the current tiles when the stage moves elsewhere">📌 pin all</button>
       <span class="spacer"></span>
       <span id="stageChip" class="pill" style="display:none;cursor:pointer" title="show this agent's chat">⇄ show chat</span>
@@ -394,7 +410,9 @@
     <div id="stageBanner"><small>stage</small><span id="stageBannerText"></span></div>
   </div>
   <section id="chatPane">
-    <div id="chatHead"><select id="mobileProject" aria-label="Project to chat with"></select><span class="who" id="chatWho">—</span><span class="where" id="chatWhere"></span><select id="agentSel" title="which agent (session) of this project"></select><button class="small" id="btnActivateAgent">Activate agent</button><button class="small" id="btnApproval">Approve to run</button><button id="btnStartAgent">Start</button><button id="btnRevokeApproval">Revoke approval</button><button class="small" id="btnAgentRename" title="rename this agent">✎</button><span class="spacer"></span><button class="small" id="btnHome" title="back to the conductor">⌂ conductor</button><button class="small" id="btnChatClose" title="close" style="display:none">✕</button></div>
+    <div id="chatViewBar"><span class="muted">Show view</span><span class="seg" id="chatPresetSeg" aria-label="Show screen or Surface"><button data-mode="both">Both</button><button data-mode="screen">Screen</button><button data-mode="surface">Surface</button></span></div>
+    <div id="chatHead"><select id="mobileProject" aria-label="Project to chat with"></select><span class="who" id="chatWho">—</span><span class="where" id="chatWhere"></span><select id="agentSel" title="which agent (session) of this project"></select><button class="small" id="btnActivateAgent">Activate agent</button><button class="small" id="btnApproval">Approve to run</button><button id="btnStartAgent">Start</button><button id="btnRevokeApproval">Revoke approval</button><button class="small" id="btnShareAgent">Share agent</button><button class="small" id="btnAgentRename" title="rename this agent">✎</button><span class="spacer"></span><button class="small" id="btnHome" title="back to the conductor">⌂ conductor</button><button class="small" id="btnChatClose" title="close" style="display:none">✕</button></div>
+    <div id="sharedAgentNote" hidden></div>
     <div id="log"></div>
     <button id="jump" title="Back to the latest messages">↓ latest</button>
     <div id="typing"><i></i><i></i><i></i> thinking</div>
@@ -451,13 +469,35 @@
     <label class="row">CLI <select id="newAgentBackend"><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="opencode">OpenCode</option></select></label>
     <label class="row">Model <select id="newAgentModel" style="flex:1;min-width:0"></select></label>
     <label class="row"><input type="text" id="newAgentCustomModel" aria-label="Custom model" maxlength="100" hidden style="flex:1;min-width:0"></label>
+    <label class="row" id="newAgentEffortRow" hidden>Effort <select id="newAgentEffort" style="flex:1;min-width:0"></select></label>
     <p id="newAgentError" role="status" class="muted"></p>
     <div class="row"><span class="spacer"></span><button type="button" id="newAgentCancel">Cancel</button><button class="primary" id="newAgentCreate">Create</button></div>
   </form>
 </dialog>
+<dialog id="shareAgentDialog" aria-labelledby="shareAgentTitle">
+  <div class="row"><h2 id="shareAgentTitle">Share agent</h2><span class="spacer"></span><button id="shareAgentClose">Close</button></div>
+  <p id="shareAgentTarget"></p>
+  <label>Recipient name <input id="shareAgentRecipient" maxlength="80" placeholder="Dana"></label>
+  <label>Access <select id="shareAgentRole"><option value="observer">Observer — history and Surface</option><option value="collaborator" selected>Collaborator — also send instructions</option><option value="manager">Manager — also start, stop and restart</option></select></label>
+  <label>Access expires in <input id="shareAgentDays" type="number" min="1" max="90" value="7"> days</label>
+  <label><input id="shareAgentHistory" type="checkbox"> Share this agent’s existing and future conversation and Surface. Collaborators can ask it to use its tools.</label>
+  <button id="shareAgentCreate" class="primary">Create invitation</button>
+  <p id="shareAgentError" role="status"></p>
+  <label>One-time invitation <textarea id="shareAgentCode" readonly></textarea></label><button id="shareAgentCopy">Copy invitation</button>
+</dialog>
 <!-- settings -->
 <div class="modal" id="settings" role="dialog" aria-modal="true" aria-labelledby="settingsTitle"><div class="card">
   <div class="row"><h2 id="settingsTitle" style="margin:0">Settings</h2><span class="spacer"></span><button id="btnSettingsClose" aria-label="Close settings">Done</button></div>
+  <details id="sharingSettings"><summary>Shared agents over Tor</summary>
+  <p id="sharingStatus" role="status">Share one agent with another Conductor, without a VPN.</p>
+  <div class="row"><button id="sharingEnable">Enable Tor sharing</button><button id="sharingRefresh">Refresh status</button></div>
+  <p>To share, select an agent and use Share agent above its conversation. Invitations can be exchanged through Bolt/Lodge.</p>
+  <label for="sharingCode">Import a shared agent</label><textarea id="sharingCode" placeholder="Paste a one-time invitation" autocomplete="off" spellcheck="false"></textarea>
+  <button id="sharingImport">Import agent</button><div id="sharingList"></div>
+  </details>
+  <h3>Delegated tasks</h3>
+  <p class="muted">Tasks are monitored silently until they return a result. Optional summaries use Conductor and appear in the original chat or voice session.</p>
+  <div id="taskMonitors"></div>
   <h3>Voice</h3>
   <div class="row settings-voice"><label class="muted">Spoken replies <select id="sEngine"><option value="elevenlabs">ElevenLabs</option><option value="browser">Browser voice</option></select></label>
     <label class="muted">ElevenLabs voice <select id="sEleven" style="max-width:320px"></select></label>
@@ -479,7 +519,8 @@
   <div class="row"><label for="displayTarget">Preview &amp; control</label><select id="displayTarget" aria-label="Display to preview and control"><option value="">Follow conductor</option></select></div>
   <div class="row"><button id="btnPresenterLink">Copy presenter link</button></div>
   <details id="fleetSettings"><summary>Machines &amp; projects</summary>
-  <div class="row"><button id="btnDiscover">Discover on network</button></div>
+  <div class="row"><button id="btnInvite" class="primary">Invite a machine</button><button id="btnDiscover">Discover on network</button></div>
+  <div id="inviteOut" class="muted" style="font-size:12.5px" role="status"></div>
   <div id="discoverOut" class="muted" style="font-size:12.5px" role="status"></div>
   <div id="machines"></div>
   <h3>Add a machine by address</h3>
@@ -564,23 +605,24 @@ async function loadTree(){
 }
 function renderTree(){
   const t = $('#tree'); t.innerHTML = '';
-  const ordered = [...tree.nodes].sort((a, b) => (b.info && b.info.control ? 1 : 0) - (a.info && a.info.control ? 1 : 0));
-  let fleetLabel = false;
+  const ordered = [...tree.nodes].sort((a, b) => (b.info && b.info.control ? 2 : b.shared?-1:0) - (a.info && a.info.control ? 2 : a.shared?-1:0));
+  let fleetLabel = false, sharedLabel = false;
   for (const nd of ordered) {
+    if(nd.shared&&!sharedLabel){sharedLabel=true;const label=document.createElement('div');label.className='fleet-label';label.textContent='Shared with me';t.appendChild(label);}
     const isMain = !!(nd.info && nd.info.control);
-    if (!isMain && !fleetLabel) { fleetLabel = true; const l = document.createElement('div'); l.className = 'fleet-label'; l.innerHTML = '<span>Fleet</span><i>machines the main agent drives</i>'; t.appendChild(l); }
+    if (!isMain && !nd.shared && !fleetLabel) { fleetLabel = true; const l = document.createElement('div'); l.className = 'fleet-label'; l.innerHTML = '<span>Fleet</span><i>machines the main agent drives</i>'; t.appendChild(l); }
     const box = document.createElement('div'); box.className = 'node' + (nd.reachable ? '' : ' unreach') + (isMain ? ' main' : '');
-    const plat = nd.info && nd.info.platform ? (nd.info.platform.system === 'Darwin' ? 'mac' : nd.info.platform.system.toLowerCase()) : '';
+    const plat = nd.shared?'shared':nd.info && nd.info.platform ? (nd.info.platform.system === 'Darwin' ? 'mac' : nd.info.platform.system.toLowerCase()) : '';
     box.innerHTML = isMain
       ? `<div class="nh"><span class="dot ${nd.reachable ? 'idle' : 'off'}"></span>Main agent <span class="plat">${escapeHtml(nd.name)}</span></div><div class="main-sub">directs the fleet, reports back to you</div>`
-      : `<div class="nh"><span class="dot ${nd.reachable ? 'idle' : 'off'}"></span>${escapeHtml(nd.name)} <span class="plat">${plat}</span></div>`;
+      : `<div class="nh"><span class="dot ${nd.reachable ? 'idle' : 'off'}"></span>${escapeHtml(nd.shared?'Shared agent':nd.name)} <span class="plat">${plat}</span></div>`;
     const nh = box.querySelector('.nh');
     if (nd.info && nd.info.host_tools !== false && nd.reachable) { nh.style.cursor = 'pointer'; nh.title = `show ${nd.name}'s screen`; nh.onclick = () => setStage(nd.name, null, false, 'screen'); if (stageSel && stageSel.node === nd.name && !stageSel.project) nh.style.color = 'var(--cyan)'; }
     for (const p of nd.projects) {
       const st = p.alive ? p.status : 'stopped';
       const el = document.createElement('div'); el.className = 'proj' + (p.conductor ? ' conductor' : '') + (chatSel && chatSel.node === nd.name && chatSel.project === p.id ? ' sel' : '') + (stageSel && stageSel.node === nd.name && stageSel.project === p.id ? ' stage' : '');
       el.innerHTML = `<span class="dot ${st}"></span><span>${escapeHtml(p.name)}</span>${p.tool ? `<span class="cost">${escapeHtml(String(p.tool).slice(0, 14))}</span>` : ''}`;
-      el.title = p.dir + (p.tool ? ' · running ' + p.tool : ''); el.onclick = () => selectProject(nd.name, p.id);
+      el.title = p.dir + (p.tool ? ' · running ' + p.tool : '') + (!p.alive && p.last_exit ? ` · exited (${p.last_exit.rc})` + (p.last_exit.stderr ? ': ' + p.last_exit.stderr : '') : ''); el.onclick = () => selectProject(nd.name, p.id);
       box.appendChild(el);
     }
     t.appendChild(box);
@@ -597,6 +639,7 @@ function syncChatHead(){
   $('#chatWho').textContent = p ? (p.conductor ? 'Conductor · main agent' : p.name) : '—'; $('#chatWhere').textContent = chatSel ? (p && p.conductor ? '' : `@ ${chatSel.node}`) : '';
   $('#input').placeholder = p ? (p.conductor ? 'Tell the main agent what you want done… (Enter to send)' : `Talk to ${p.name} directly… (Enter to send)`) : 'Select an agent';
   if(LODGE)lodgeSyncChat();
+  sharedControls();
   const c = conductorSel(); $('#btnHome').style.display = (c && chatSel && (c.node !== chatSel.node || c.project !== chatSel.project)) ? '' : 'none';
 }
 $('#btnHome').onclick = () => { const c = conductorSel(); if (c) selectProject(c.node, c.project); };
@@ -617,7 +660,7 @@ async function loadAgents(){
 }
 function renderAgentSel(){
   const sel = $('#agentSel');
-  sel.innerHTML = agentsCache.items.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}${a.session_id ? '' : ' · new'}</option>`).join('') + (LODGE ? '' : `<option value="__new">＋ new agent…</option><option value="__import">⤓ resume a previous session…</option>`);
+  sel.innerHTML = agentsCache.items.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}${a.session_id || sharedSelection() ? '' : ' · new'}</option>`).join('') + (LODGE || sharedSelection() ? '' : `<option value="__new">＋ new agent…</option><option value="__import">⤓ resume a previous session…</option>`);
   sel.value = viewedAgentId || (agentsCache.items[0] || {}).id || '__new';
   const a=agentsCache.items.find(a=>a.id===viewedAgentId);
   $('#btnActivateAgent').hidden=!a||viewedAgentId===agentsCache.active;
@@ -653,6 +696,28 @@ let bannerTimer;
 let stageTiles = [];             // [{id, node, project, kind:'screen'|'surface', pinned, el, ws, ...}]
 const STAGE_CAPACITY = 6;
 let stagePref = 'both'; try { stagePref = localStorage.getItem('an-view') || 'both'; } catch {}
+let chatWide = false; try { chatWide = !MOBILE && !LODGE && !READ_ONLY && localStorage.getItem('an-chat-wide') === '1'; } catch {}
+document.body.classList.toggle('chatwide',chatWide);
+function syncWorkViewControls(){
+  const onConductor=stageSel && isConductor(stageSel.node,stageSel.project);
+  document.querySelectorAll('#presetSeg button,#chatPresetSeg button').forEach(b=>{
+    const selected=!chatWide && b.dataset.mode===stagePref;
+    b.classList.toggle('on',selected);b.setAttribute('aria-pressed',String(selected));
+    if(b.dataset.mode==='screen')b.textContent=onConductor?'Fleet':'Screen';
+    b.title=selected?'Hide views and expand chat':'Show '+b.textContent.toLowerCase();
+  });
+}
+function setChatWide(wide){
+  // This is local layout only: preserve live tiles, pins and the shared Stage.
+  const bottom=atBottom(),top=logEl.getBoundingClientRect().top;
+  const anchor=[...logEl.children].find(el=>el.getBoundingClientRect().bottom>top);
+  const offset=anchor?anchor.getBoundingClientRect().top-top:0;
+  chatWide=wide;document.body.classList.toggle('chatwide',wide);
+  try{localStorage.setItem('an-chat-wide',wide?'1':'0');}catch{}
+  syncWorkViewControls();
+  requestAnimationFrame(()=>{if(bottom)logEl.scrollTop=logEl.scrollHeight;else if(anchor?.isConnected)logEl.scrollTop+=anchor.getBoundingClientRect().top-logEl.getBoundingClientRect().top-offset;});
+}
+
 function nodeHasScreen(node){ const nd = nodeByName(node); return !(nd && nd.info && nd.info.host_tools === false); }
 function nodeHasHub(node){ const nd = nodeByName(node); return !!(nd && nd.hub_port); }
 function tilesFor(node, project, view){
@@ -804,7 +869,7 @@ function syncStageUi(){
   $('#voStage').textContent = $('#stageWhere').textContent;
   const onConductor = stageSel && isConductor(stageSel.node, stageSel.project);
   document.body.classList.toggle('noscreen', !!noScreen && !onConductor);
-  document.querySelectorAll('#presetSeg button').forEach(b => { b.classList.toggle('on', b.dataset.mode === stagePref); if (b.dataset.mode === 'screen') b.textContent = onConductor ? 'Fleet' : 'Screen'; });
+  syncWorkViewControls();
   const showChip = stageSel && stageSel.project && (!chatSel || chatSel.node !== stageSel.node || chatSel.project !== stageSel.project);
   $('#stageChip').style.display = showChip ? '' : 'none';
   syncStageItems();
@@ -812,7 +877,14 @@ function syncStageUi(){
   window.stagePresentation?.changed();
 }
 $('#stageChip').onclick = () => { if (stageSel && stageSel.project) selectProject(stageSel.node, stageSel.project); };
-document.querySelectorAll('#presetSeg button').forEach(b => b.onclick = () => { stagePref = b.dataset.mode; try { localStorage.setItem('an-view', stagePref); } catch {} if (stageSel) setStage(stageSel.node, stageSel.project, true, stagePref); });
+document.querySelectorAll('#presetSeg button,#chatPresetSeg button').forEach(b=>b.onclick=()=>{
+  if(MOBILE || LODGE || READ_ONLY || document.body.classList.contains('projection')){setMode(b.dataset.mode);return;}
+  if(!chatWide && b.dataset.mode===stagePref){
+    setChatWide(true);$('#chatPresetSeg button[data-mode="'+stagePref+'"]').focus();return;
+  }
+  setChatWide(false);setMode(b.dataset.mode);syncWorkViewControls();
+  $('#presetSeg button[data-mode="'+stagePref+'"]').focus();
+});
 $('#btnPin').onclick = () => { for (const t of stageTiles) { t.pinned = true; t.el.querySelector('.pin').classList.add('on'); } syncStageUi(); toast('tiles pinned — new focus adds alongside', 2500); };
 function setMode(m, persist = true){ stagePref = m; if (persist) { try { localStorage.setItem('an-view', m); } catch {} } if (stageSel) setStage(stageSel.node, stageSel.project, true, m); }
 
@@ -864,6 +936,7 @@ function hubBase(node){ if(LODGE){const nd=nodeByName(node);const slot=nd?.local
 async function probeHub(base){ if (!base || location.protocol !== 'https:') return true; if (hubOk.get(base)) return true; try { await fetch(base + '/healthz', {mode: 'no-cors', cache: 'no-store'}); hubOk.set(base, true); return true; } catch { return false; } }
 async function workspacesOf(node){ const c = wsCache.get(node); if (c && Date.now() - c.ts < 15000) return c.items; try { const r = await apiJson(`${nodePrefix(node)}/api/surface/workspaces`); const items = r.items || []; wsCache.set(node, {items, ts: Date.now()}); return items; } catch { return []; } }
 async function mountSurfaceTile(t){
+  if(nodeByName(t.node)?.shared)return mountSharedSurface(t);
   const tb = t.el.querySelector('.tb'); const base = hubBase(t.node); const nd = nodeByName(t.node);
   const off = (html) => { tb.innerHTML = `<div class="off">${html}</div>`; };
   if (!base) { off(`no Surface hub on ${escapeHtml(t.node)}`); return; }
@@ -1047,7 +1120,7 @@ function makeRenderer(logEl, opts){
         R.live = null; scroll(); R.onResult(ev); break;
       }
       case 'system': if (!LODGE && ev.subtype === 'init') { const s = document.createElement('div'); s.className='sys'; const mcp = (ev.mcp_servers||[]).map(x=>`${x.name}: ${x.status}`).join(', '); s.textContent = `session ${(ev.session_id||'').slice(0,8)} · ${ev.model||''} · mcp ${mcp||'none'}`; logEl.appendChild(s); scroll(); } break;
-      case 'bridge': { if (ev.subtype === 'surface_ws') { break; } if (ev.subtype === 'agent_switched') { if (R.main) loadAgents(); break; } const s = document.createElement('div'); s.className='sys'; s.textContent = ev.subtype === 'process_exit' ? 'Agent stopped' : ev.subtype === 'cleared' ? 'New conversation' : ev.subtype === 'interrupt' ? 'Stop requested' : (ev.text || ev.subtype); if (ev.subtype==='cleared') { logEl.innerHTML=''; R.toolCards.clear(); R.live=null; } logEl.appendChild(s); scroll(); break; }
+      case 'bridge': { if (ev.subtype === 'surface_ws') { break; } if (ev.subtype === 'agent_switched') { if (R.main) loadAgents(); break; } const s = document.createElement('div'); s.className='sys'; s.textContent = ev.subtype === 'process_exit' ? 'Agent stopped' + (ev.rc ? ` (rc ${ev.rc})` : '') + (ev.stderr ? ': ' + ev.stderr : '') : ev.subtype === 'cleared' ? 'New conversation' : ev.subtype === 'interrupt' ? 'Stop requested' : (ev.text || ev.subtype); if (ev.subtype==='cleared') { logEl.innerHTML=''; R.toolCards.clear(); R.live=null; } logEl.appendChild(s); scroll(); break; }
       case 'status': R.onStatus(ev); break;
       case 'history': { logEl.innerHTML=''; R.toolCards.clear(); R.toolStart.clear(); R.live=null; R.replaying = true; if(ev.truncated && R.main){const note=document.createElement('div');note.className='sys';note.textContent='Showing recent messages. Earlier history is retained on this machine.';logEl.appendChild(note);} let evs = ev.events; if (!R.main) { let i = evs.length - 1; while (i >= 0 && !(evs[i].type === 'user_input' && evs[i].origin)) i--; evs = (i >= 0 && Date.now() / 1000 - (evs[i].ts || 0) < 60) ? evs.slice(i) : []; } for (const e of evs) R.handle(e); R.replaying = false; R.live=null; scroll(); break; }
     }
@@ -1105,8 +1178,9 @@ function setStatus(s){
   const st = s.alive ? s.status : 'off';
   $('#agentDot').className = 'dot ' + st; $('#agentText').textContent = st === 'working' ? (s.tool ? `running ${s.tool}` : 'thinking') : st;
   $('#typing').classList.toggle('show', st === 'working'); $('#typing').lastChild.textContent = ' ' + (s.tool ? `running ${s.tool}` : 'thinking');
-  $('#modelPill').textContent = s.model || 'opus';
+  $('#modelPill').textContent = (s.model || 'opus') + (s.reasoning_effort ? ' · ' + s.reasoning_effort : '');
   if(s.approval&&s.approval!=='approved')$('#agentText').textContent=s.approval==='revoked'?'Approval revoked':'Awaiting approval';
+  else if(!s.alive&&s.last_exit){const why=s.last_exit.stderr?': '+s.last_exit.stderr.split('\n').pop().slice(0,160):'';$('#agentText').textContent=`exited (${s.last_exit.rc})${why}`;$('#agentText').title=s.last_exit.stderr||'';}
   if ('hub_ok' in s) { $('#hubDot').className = 'dot ' + (s.hub_ok ? 'idle' : 'off'); $('#hubText').textContent = s.hub_ok ? (s.pending_context ? `surface · ${s.pending_context} note${s.pending_context>1?'s':''} pending` : 'surface') : 'surface offline'; }
   if(LODGE){const p=chatSel&&projectOf(chatSel.node,chatSel.project);if(p&&s.agent===agentsCache.active)Object.assign(p,{status:s.status,running:s.running,alive:s.alive,tool:s.tool});lodgeSyncChat();}
   if ('surface_ws' in s && chatSel && s.agent===agentsCache.active) { const p = projectOf(chatSel.node, chatSel.project); if (p && p.surface_ws !== s.surface_ws) { p.surface_ws = s.surface_ws; for (const t of stageTiles) if (t.kind === 'surface' && t.node === chatSel.node && t.project === chatSel.project) mountSurfaceTile(t); } }
@@ -1117,18 +1191,29 @@ function setStatus(s){
 // connections: chat (chatSel), screen (stageSel), control channel
 // ============================================================================
 let chat = null, chatKey = '';
+let leavingPage=false, chatSnapshotTimer=null;
 function wsUrl(path){ return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + path + (path.includes('?') ? '' : '?') + tokenQS(); }
 function connectChat(){
-  if (!chatSel) return;
+  if (leavingPage || !chatSel) return;
   if(!viewedAgentId)return;
   const key = chatSel.node + '/' + chatSel.project + '/' + viewedAgentId;
   if (chat && chatKey === key && chat.readyState <= 1) return;
   if (chat) { chat.onclose = null; chat.close(); }
+  clearTimeout(chatSnapshotTimer);
   chatKey=key;closeDelegates();
   const prefix=`${nodePrefix(chatSel.node)}/api/projects/${encodeURIComponent(chatSel.project)}/agents/${encodeURIComponent(viewedAgentId)}/history`;
   const cursor=historyView.select(key,prefix);
   const w=new WebSocket(wsUrl(`${nodePrefix(chatSel.node)}/ws/projects/${encodeURIComponent(chatSel.project)}/agents/${encodeURIComponent(viewedAgentId)}/chat`)+(cursor?'&after='+encodeURIComponent(cursor):''));chat=w;
-  w.onmessage = e => { if (chat !== w) return; try { handleEvent(JSON.parse(e.data)); } catch (err) { console.error(err); } };
+  let receivedHistory=false;
+  const snapshot=async()=>{
+    if(chat!==w||leavingPage||receivedHistory)return;
+    await historyView.refresh();
+    if(chat===w&&!leavingPage&&!receivedHistory)chatSnapshotTimer=setTimeout(snapshot,5000);
+  };
+  snapshot();
+  let receivedStatus=false;
+  apiJson(prefix.replace(/\/history$/,'/status')).then(status=>{if(chat===w&&!leavingPage&&!receivedStatus)setStatus(status);}).catch(()=>{});
+  w.onmessage = e => { if (chat !== w) return; try { const event=JSON.parse(e.data);if(event.type==='status')receivedStatus=true;if(event.type==='history_page'||event.type==='history'){receivedHistory=true;clearTimeout(chatSnapshotTimer);}handleEvent(event); } catch (err) { console.error(err); } };
   w.onclose = () => { if (chat !== w) return; setStatus({alive:false, status:'off'}); $('#agentText').textContent = 'reconnecting'; setTimeout(() => { if (chat === w) { chatKey = ''; connectChat(); } }, 2000); };
   w.onopen = () => { keepalive(w); };
 }
@@ -1156,6 +1241,7 @@ function persistDrafts(){ try { sessionStorage.setItem('an-drafts', JSON.stringi
 function saveDraft(){ const key=draftKey(); if (!key) return; const previous=drafts[key] || {}; drafts[key]={...previous,text:$('#input').value,annotations:pendingAnnots,files:pendingFiles}; persistDrafts(); }
 function restoreDraft(){ const d=drafts[draftKey()] || {}; $('#input').value=d.text || ''; pendingAnnots=d.annotations || []; pendingFiles=d.files || []; renderAnnots(); renderAttachments(); autosize(); }
 async function sendText(spoken){
+  if(sharedSelection()?.role==='observer')return;
   if(LODGE&&!lodgeCanSend())return;
   const t=$('#input').value.trim(), key=draftKey(); if ((!t&&!pendingFiles.length) || !key || sendingDrafts.has(key)) return;
   if(pendingFiles.some(f=>!f.path)){toast('Wait for uploads to finish, or remove files that could not upload.');return;}
@@ -1229,18 +1315,18 @@ $('#btnInterrupt').onclick = () => { stopSpeaking(); sendCmd({type:'interrupt'})
 $('#btnStartAgent').onclick=()=>sendCmd({type:'start'});
 $('#btnRevokeApproval').onclick=async()=>{try{await apiJson(`${nodePrefix(chatSel.node)}/api/projects/${encodeURIComponent(chatSel.project)}/agents/${encodeURIComponent(viewedAgentId)}/approval`,{method:'POST',body:{approval:'revoked'}});await loadAgents();}catch(e){toast(e.message);}};
 $('#btnRestart').onclick = () => sendCmd({type:'restart'});
-const newAgentModels=new ConductorModelPicker($('#newAgentModel'),$('#newAgentCustomModel'),$('#newAgentBackend'),()=>apiJson(`${nodePrefix($('#newAgentDialog').dataset.node)}/api/models`));
+const newAgentModels=new ConductorModelPicker($('#newAgentModel'),$('#newAgentCustomModel'),$('#newAgentBackend'),()=>apiJson(`${nodePrefix($('#newAgentDialog').dataset.node)}/api/models`),$('#newAgentEffort'),$('#newAgentEffortRow'));
 function showNewAgent(){
   if (!chatSel) return;
   const active=agentsCache.items.find(a=>a.id===agentsCache.active);
   const dialog=$('#newAgentDialog'); dialog.dataset.node=chatSel.node; dialog.dataset.project=chatSel.project;
   $('#newAgentName').value=''; $('#newAgentBackend').value=active?.backend || (LODGE ? 'codex' : 'claude');
-  newAgentModels.refresh(active?.model || ''); $('#newAgentError').textContent=''; dialog.showModal();
+  newAgentModels.refresh(active?.model || '', active?.reasoning_effort || ''); $('#newAgentError').textContent=''; dialog.showModal();
 }
 $('#newAgentCancel').onclick=()=>$('#newAgentDialog').close();
 $('#newAgentForm').onsubmit=async e=>{
   e.preventDefault(); const dialog=$('#newAgentDialog'), button=$('#newAgentCreate');
-  const body={name:$('#newAgentName').value.trim(),backend:$('#newAgentBackend').value,model:newAgentModels.value() || undefined};
+  const body={name:$('#newAgentName').value.trim(),backend:$('#newAgentBackend').value,model:newAgentModels.value() || undefined,reasoning_effort:newAgentModels.effortValue()};
   if (!body.name) return;
   button.disabled=true; $('#newAgentError').textContent='Creating…';
   try {
@@ -1269,10 +1355,11 @@ function dispatchControl(ev){
       if (ev.phase === 'sent') { inflight.set(ev.node + '/' + ev.project, {t0: Date.now(), node: ev.node, project: ev.project, brief: ev.brief}); ambPulse(ev.node, 'out', 'send', ev.brief, ev.project); sfx('send'); }
       else { inflight.delete(ev.node + '/' + ev.project); ambPulse(ev.node, 'in', ev.is_error ? 'error' : 'done', ev.summary, ev.project); sfx(ev.is_error ? 'error' : 'done'); }
     }
-    else if (ev.type === 'project_status') { const p = projectOf(ev.node, ev.project); if (p) { p.status = ev.status; p.tool = ev.tool; p.alive = ev.alive; renderTree(); if (chatSel && chatSel.node === ev.node && chatSel.project === ev.project && (!chat || chat.readyState !== 1)) setStatus({...p, model: p.model}); } }
+    else if (ev.type === 'project_status') { const p = projectOf(ev.node, ev.project); if (p) { p.status = ev.status; p.tool = ev.tool; p.alive = ev.alive; if ('last_exit' in ev) p.last_exit = ev.last_exit; renderTree(); if (chatSel && chatSel.node === ev.node && chatSel.project === ev.project && (!chat || chat.readyState !== 1)) setStatus({...p, model: p.model}); } }
     else if (ev.type === 'projects_changed' || ev.type === 'nodes_changed') { loadTree(); if ($('#settings').classList.contains('show')) renderSettings(); }
 }
 function connectControl(){
+  if(leavingPage)return;
   const w=new WebSocket(wsUrl('/ws/control?voice_client='+encodeURIComponent(VOICE_CLIENT_ID)));ctl=w;
   w.onopen=()=>window.stagePresentation?.connected(true);
   w.onmessage=e=>{let ev;try{ev=JSON.parse(e.data);}catch{return;}
@@ -1284,10 +1371,16 @@ function connectControl(){
   };
   w.onclose=()=>{window.stagePresentation?.connected(false);setTimeout(connectControl,2500);};
 }
+window.addEventListener('pagehide',()=>{
+  leavingPage=true;clearTimeout(chatSnapshotTimer);
+  for(const socket of [chat,ctl,...stageTiles.map(t=>t.ws)])if(socket){socket.onclose=null;socket.close(1000,'Page closed');}
+});
+window.addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
 
 // ============================================================================
 // settings: machines, discovery, projects
 // ============================================================================
+const taskMonitors = new ConductorDelegations($('#taskMonitors'), apiJson, () => $('#settings').classList.contains('show'));
 let settingsFocus=null;
 function closeSettings(){ $('#settings').classList.remove('show');if(MOBILE)syncMobileNav(vo.open?'voice':document.body.classList.contains('showchat')?'chat':'stage');settingsFocus?.focus(); }
 $('#btnSettings').onclick = $('#btnSettings2').onclick = () => { settingsFocus=document.activeElement;$('#settings').classList.add('show');if(MOBILE)syncMobileNav('settings');$('#btnSettingsClose').focus();renderSettings().catch(e=>toast('Settings could not load: '+e.message,6000)); };
@@ -1317,15 +1410,19 @@ async function settingsAction(button, action){
   try{await action();await renderSettings();}catch(e){toast(e.message || 'The change could not be saved. Try again.',6000);}finally{button.disabled=false;}
 }
 async function renderSettings(){
+  renderSharing();
+  taskMonitors.refresh();
   if (vcfg.tts_server && !$('#vEleven').options.length) await fillElevenVoices();
   syncSettingsVoice();
   const box = $('#machines'); box.innerHTML = '<div class="muted">loading…</div>';
   await loadTree();
   box.innerHTML = '';
-  for (const nd of tree.nodes) {
+  for (const nd of tree.nodes.filter(n=>!n.shared)) {
     const m = document.createElement('div'); m.className = 'machine';
     const info = nd.info || {}; const plat = info.platform ? `${info.platform.system} ${info.platform.release}` : '';
-    m.innerHTML = `<div class="mh"><span class="dot ${nd.reachable ? 'idle' : 'off'}"></span><b>${escapeHtml(nd.name)}</b><span class="muted">${nd.local ? 'this machine' : escapeHtml(nd.url || '')} · ${escapeHtml(plat)}${info.wake_word ? ' · wake “' + escapeHtml(info.wake_word) + '”' : ''}${nd.hub_port ? ' · surface hub' : ''}${nd.error ? ' · ' + escapeHtml(nd.error) : ''}</span><span class="spacer"></span>${nd.local ? '' : `<button class="small danger" data-rm="${escapeHtml(nd.name)}">remove machine</button>`}</div>`;
+    const clis = info.clis ? Object.entries(info.clis).filter(([,ok]) => ok).map(([k]) => k).join('/') : '';
+    const facts = [info.backend ? `${escapeHtml(info.backend)} · ${escapeHtml(info.model || 'node default')}` : '', clis ? 'CLIs ' + escapeHtml(clis) : '', info.host_tools === false ? 'no host tools' : ''].filter(Boolean).join(' · ');
+    m.innerHTML = `<div class="mh"><span class="dot ${nd.reachable ? 'idle' : 'off'}"></span><b>${escapeHtml(nd.name)}</b><span class="muted">${nd.local ? 'this machine' : escapeHtml(nd.url || '')} · ${escapeHtml(plat)}${info.wake_word ? ' · wake “' + escapeHtml(info.wake_word) + '”' : ''}${nd.hub_port ? ' · surface hub' : ''}${facts ? ' · ' + facts : ''}${nd.error ? ' · ' + escapeHtml(nd.error) : ''}</span><span class="spacer"></span>${nd.local ? '' : `<button class="small danger" data-rm="${escapeHtml(nd.name)}">remove machine</button>`}</div>`;
     if (nd.reachable) {
       const t = document.createElement('table'); t.className = 't';
       t.innerHTML = `<tr><th>project</th><th>folder</th><th>status</th><th>cost</th><th></th></tr>` + nd.projects.map(p => `<tr><td>${escapeHtml(p.name)}${p.conductor ? ' <span class="muted">(conductor)</span>' : ''}</td><td class="mono">${escapeHtml(p.dir)}</td><td><span class="dot ${p.alive ? p.status : 'stopped'}" style="display:inline-block;vertical-align:middle;margin-right:5px"></span>${p.alive ? p.status : 'stopped'}</td><td class="mono">$${(p.cost||0).toFixed(2)}${p.agents > 1 ? ` · ${p.agents} agents` : ''}</td><td style="white-space:nowrap">
@@ -1335,17 +1432,30 @@ async function renderSettings(){
         <button class="small danger" data-act="delete" data-n="${escapeHtml(nd.name)}" data-p="${escapeHtml(p.id)}">remove</button></td></tr>`).join('');
       m.appendChild(t);
       const add = document.createElement('div'); add.className = 'row';
-      add.innerHTML = `<input type="text" placeholder="folder on ${escapeHtml(nd.name)}, e.g. ~/Projects/foo" style="width:280px" data-dir><input type="text" placeholder="name" style="width:120px" data-name><select data-backend aria-label="CLI backend"><option value="">Node default</option><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="opencode">OpenCode</option></select><select data-model aria-label="Model" style="max-width:240px"></select><input type="text" data-custom-model aria-label="Custom model" maxlength="100" hidden style="width:240px"><label class="muted"><input type="checkbox" data-host checked> host tools</label><button class="small primary" data-add="${escapeHtml(nd.name)}">+ add project</button>`;
+      add.innerHTML = `<input type="text" placeholder="folder on ${escapeHtml(nd.name)}, e.g. ~/Projects/foo" style="width:280px" data-dir><input type="text" placeholder="name" style="width:120px" data-name><select data-backend aria-label="CLI backend"><option value="">Node default</option><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="opencode">OpenCode</option></select><select data-model aria-label="Model" style="max-width:240px"></select><input type="text" data-custom-model aria-label="Custom model" maxlength="100" hidden style="width:240px"><select data-effort aria-label="Reasoning effort" hidden></select><label class="muted"><input type="checkbox" data-host checked> host tools</label><button class="small primary" data-add="${escapeHtml(nd.name)}">+ add project</button>`;
       m.appendChild(add);
-      add.modelPicker=new ConductorModelPicker(add.querySelector('[data-model]'),add.querySelector('[data-custom-model]'),add.querySelector('[data-backend]'),()=>apiJson(`${nodePrefix(nd.name)}/api/models`));
+      add.modelPicker=new ConductorModelPicker(add.querySelector('[data-model]'),add.querySelector('[data-custom-model]'),add.querySelector('[data-backend]'),()=>apiJson(`${nodePrefix(nd.name)}/api/models`),add.querySelector('[data-effort]'));
       add.modelPicker.refresh();
     }
     box.appendChild(m);
   }
   box.querySelectorAll('[data-act]').forEach(b => b.onclick = () => { const {act, n, p} = b.dataset; if (act === 'delete' && !confirm(`Remove project ${p} from ${n}? (its files stay)`)) return; return settingsAction(b,()=>apiJson(`${nodePrefix(n)}/api/projects/${encodeURIComponent(p)}${act === 'delete' ? '' : '/' + act}`, {method: act === 'delete' ? 'DELETE' : 'POST', body: act === 'delete' ? undefined : {}})); });
-  box.querySelectorAll('[data-add]').forEach(b => b.onclick = () => { const row = b.parentElement; const dir = row.querySelector('[data-dir]').value.trim(); if (!dir) return; return settingsAction(b,()=>apiJson(`${nodePrefix(b.dataset.add)}/api/projects`, {method:'POST', body:{dir, name: row.querySelector('[data-name]').value.trim() || undefined, backend: row.querySelector('[data-backend]').value || undefined, model: row.modelPicker.value() || undefined, host_tools: row.querySelector('[data-host]').checked, start: true}})); });
+  box.querySelectorAll('[data-add]').forEach(b => b.onclick = () => { const row = b.parentElement; const dir = row.querySelector('[data-dir]').value.trim(); if (!dir) return; return settingsAction(b,()=>apiJson(`${nodePrefix(b.dataset.add)}/api/projects`, {method:'POST', body:{dir, name: row.querySelector('[data-name]').value.trim() || undefined, backend: row.querySelector('[data-backend]').value || undefined, model: row.modelPicker.value() || undefined, reasoning_effort: row.modelPicker.effortValue(), host_tools: row.querySelector('[data-host]').checked, start: true}})); });
   box.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { if (!confirm(`Remove machine ${b.dataset.rm} from the fleet?`)) return; return settingsAction(b,()=>apiJson(`/api/control/nodes/${encodeURIComponent(b.dataset.rm)}`, {method:'DELETE'})); });
 }
+$('#btnInvite').onclick = () => settingsAction($('#btnInvite'), async () => {
+  const out = $('#inviteOut'); out.textContent = 'Creating a pairing code…';
+  try {
+    const r = await apiJson('/api/control/invites', {method:'POST', body:{}});
+    out.replaceChildren();
+    const hint = document.createElement('div'); hint.textContent = `On the new machine run this within ${Math.round((r.expires*1000-Date.now())/60000)} minutes (single use; it must reach ${r.url}):`; out.appendChild(hint);
+    const cmd = document.createElement('code'); cmd.className = 'mono'; cmd.style.cssText = 'display:block;user-select:all;overflow-wrap:anywhere;margin:6px 0'; cmd.textContent = `python -m agentnode join ${r.code}`; out.appendChild(cmd);
+    const copy = document.createElement('button'); copy.className = 'small'; copy.textContent = 'Copy code';
+    copy.onclick = async () => { try { await navigator.clipboard.writeText(r.code); copy.textContent = 'Copied'; } catch { copy.textContent = 'Select and copy the code above'; } };
+    out.appendChild(copy);
+    const docker = document.createElement('div'); docker.className = 'muted'; docker.textContent = 'Worker container: set AGENTNODE_JOIN_CODE to the code instead.'; out.appendChild(docker);
+  } catch (e) { out.textContent = e.message; throw e; }
+});
 $('#btnDiscover').onclick = async () => {
   const out = $('#discoverOut'); out.textContent = 'scanning the local network for agentnodes… (a few seconds)';
   try { const r = await apiJson('/api/control/discover'); if (!r.found.length) { out.textContent = `nothing found on ${r.subnet} (port 8444). Install agentnode on the other machine first.`; return; }
@@ -1953,17 +2063,18 @@ async function boot(){
   try { const c = await apiJson('/api/voice/config'); Object.assign(vcfg, c); WAKE = buildWake(vcfg.wake_word); if (voice.engine === 'elevenlabs' && !vcfg.tts_server) voice.engine = 'browser'; if (vcfg.tts_server && !voice.engineChosen) { voice.engine = 'elevenlabs'; voice.engineChosen = true; saveVoice(); } if (!voice.listenerChosen) { voice.listener = 'stream'; voice.listenerChosen = true; saveVoice(); } if (vcfg.tts_server) fillElevenVoices(); } catch {}
   syncVoiceUi();
   await loadTree(); connectControl();
-  // boot splash: light the fleet up, then reveal
+  // Reveal as soon as the fleet is available; connections hydrate independently.
   const bn = $('#bootNodes'); bn.innerHTML = tree.nodes.map((n, i) => `<span style="animation-delay:${.2 + i * .12}s">${escapeHtml(n.name)}</span>`).join('');
   tree.nodes.forEach((n, i) => setTimeout(() => { const el = bn.children[i]; if (el && n.reachable) el.classList.add('on'); }, 500 + i * 220));
-  setTimeout(() => $('#boot').classList.add('hide'), 700 + tree.nodes.length * 220 + 500);
   await stagePresentation.refresh();
   if (LODGE) { syncMobileProjects(); enterLodge(); }
   else if (MOBILE) { syncMobileProjects(); mobileView('voice'); }
   else if (new URLSearchParams(location.search).get('present')==='1') stagePresentation.enter();
   else if (location.hash === '#voice') setTimeout(openVoiceMode,1800);
   stagePresentation.ready=true;
+  $('#boot').classList.add('hide');
 }
+initializeSharing();
 (async () => {
   // first contact: is this node open to us?
   const r = await fetch('/api/projects', {headers: TOKEN ? {'X-Agentnode-Token': TOKEN} : {}});

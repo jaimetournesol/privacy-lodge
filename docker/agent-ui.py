@@ -53,7 +53,7 @@ finally:s.close()
 
 servers=[]
 try:
-    for local,target in [(port,8787)] + [(port+1+slot,4400+slot) for slot in range(17)]:
+    for local,target in [(port,8787)] + [(port+1+slot,4400+slot) for slot in range(17)] + [(port+18+slot,8900+slot) for slot in range(1,17)]:
         server=Server(('127.0.0.1',local),Relay);server.target=target;servers.append(server)
         threading.Thread(target=server.serve_forever,daemon=True).start()
     url=f'http://127.0.0.1:{port}/?lodge=1&tunnel=1#token='+urllib.parse.quote(token,safe='')

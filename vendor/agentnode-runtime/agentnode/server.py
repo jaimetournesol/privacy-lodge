@@ -20,6 +20,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from . import auth as browser_auth
 from . import transport, policy, history as transcripts
+from . import sharing
 from .broadcast import send_all
 from .screen_control import ScreenControl, geometry as screen_geometry, input_message
 from .validation import json_object, body_bytes, project_fields
@@ -34,6 +35,7 @@ from .delivery import DeliveryError
 from .presentation import StageState, StageConflict, DisplayRegistry, DisplayChoice, clean_tiles
 from .storage import read_json, write_json
 from urllib.parse import quote, urlsplit, urlencode
+from collections import deque
 from .util import http_json, log
 
 VERSION = "0.1.0"
@@ -85,7 +87,8 @@ _lifecycle_lock = asyncio.Lock()
 # --------------------------------------------------------------------------
 # Browser origins are checked independently of authentication.
 # --------------------------------------------------------------------------
-PUBLIC = ("/", "/healthz", "/api/node/info", "/static/", "/favicon.ico")
+PUBLIC = ("/", "/healthz", "/api/node/info", "/static/", "/favicon.ico",
+          "/api/control/join", "/api/control/join/confirm")  # join routes authenticate with a single-use pairing secret
 
 
 def presenter_claims(headers, query):
@@ -250,7 +253,8 @@ async def _start_runtime():
                 voicestream.on_turn_end(sess.project["id"])
         asyncio.ensure_future(notify_control({
             "type": "project_status", "node": NODE["name"], "project": sess.project["id"], "status": sess.status,
-            "tool": sess.current_tool, "alive": bool(sess.proc and sess.proc.poll() is None), "agent": sess.active_id, "ts": time.time()}))
+            "tool": sess.current_tool, "alive": bool(sess.proc and sess.proc.poll() is None), "agent": sess.active_id,
+            "last_exit": sess.last_exit, "ts": time.time()}))
     ProjectSession.on_status = _on_status
     _unused = lambda sess: asyncio.ensure_future(notify_control({
         "type": "project_status", "node": NODE["name"], "project": sess.project["id"], "status": sess.status,
@@ -261,6 +265,10 @@ async def _start_runtime():
             await lodge_surface.start()
         else:
             threading.Thread(target=voicemod.load_wake_model, daemon=True).start()
+        try:
+            from . import sharing_runtime
+            await sharing_runtime.start()
+        except Exception as exc:log("sharing unavailable:",str(exc))
         _start_relays()
         _restore_watches()
         _relays["__watch_supervisor"] = asyncio.create_task(_watch_supervisor())
@@ -277,6 +285,8 @@ async def _shutdown():
         if os.environ.get('LODGE_MODE') == '1' and NODE.get('control'):
             from . import lodge_surface
             await lodge_surface.stop()
+        from . import sharing_runtime
+        await sharing_runtime.stop()
         ProjectSession.on_status = None
         tasks = list(_relays.values()) + list(_watches.values())
         if voicestream:
@@ -317,6 +327,13 @@ async def healthz():
     return {"ok": True, "name": NODE["name"], "projects": len(sessions), "release":release_identity()}
 
 
+def installed_clis():
+    """Which agent CLIs this machine can launch; presence only, no version or login probing."""
+    import shutil
+    from .backends import BACKENDS, binary_for
+    return {backend: bool(shutil.which(binary_for(backend, NODE))) for backend in BACKENDS}
+
+
 @app.get("/api/node/info")
 async def node_info():
     return {"name": NODE["name"], "version": VERSION, "platform": platform_info(), "control": bool(NODE.get("control")),
@@ -324,7 +341,12 @@ async def node_info():
             "hub_port": NODE["hub_port"] if NODE.get("surface_dir") else None,
             "hub_tls_port": NODE["hub_tls_port"] if NODE.get("surface_dir") else None,
             "screen": screen.size if screen else None, "screen_error": screen.error if screen else None,
-            "ui_version": int((STATIC / "index.html").stat().st_mtime), "release":release_identity(), "capabilities":{"agent_history":1,"human_screen_control":bool(screen),"lodge_codex":os.environ.get("LODGE_MODE")=="1"}}
+            "backend": NODE.get("backend", "claude"), "model": NODE.get("model"), "clis": installed_clis(),
+            "surface": bool(NODE.get("surface_dir")),
+            "fleet": {"control": NODE.get("control_name"), "url": NODE.get("control_url"), "pending": bool(NODE.get("join_pending"))} if NODE.get("control_url") else None,
+            "ui_version": int((STATIC / "index.html").stat().st_mtime), "release":release_identity(),
+            "capabilities":{"agent_history":1,"human_screen_control":bool(screen),"lodge_codex":os.environ.get("LODGE_MODE")=="1",
+                            "join":1 if NODE.get("control") else 0}}
 
 
 @app.get("/api/projects")
@@ -359,6 +381,7 @@ async def presenter_surface_access(req: Request):
                 assigned=info.get('surface_ws')
         if assigned and assigned==ws:allowed=True;break
     if not allowed:raise HTTPException(403,'Workspace is not in this presentation')
+    if n.get('shared_id'):return await sharing.imported_surface_access(n['shared_id'],ws)
     return {'access':browser_auth.capability(n['token'],'surface','presenter',ws=[ws])}
 
 
@@ -394,16 +417,17 @@ async def create_project(req: Request):
         return JSONResponse({"error": str(e)}, status_code=422)
     if pid in sessions:
         return JSONResponse({"error": f"project '{pid}' exists"}, status_code=409)
-    from .backends import model_for
+    from .backends import model_for, effort_for, validate_effort
     backend = body.get('backend') or NODE.get('backend', 'claude')
     try:
         model = model_for(backend, NODE, {'backend': backend, 'model': body.get('model')})
+        validate_effort(backend, effort_for(backend, NODE, {**body, 'backend': backend}), model, NODE)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     Path(d).mkdir(parents=True, exist_ok=True)
     p = {"id": pid, "name": name, "dir": d, "backend": backend, "model": model,
          "host_tools": body.get("host_tools", os.environ.get("LODGE_MODE") != "1"), "conductor": bool(body.get("conductor")), "approval":"pending", "createdAt": time.time()}
-    for key in ('instructions', 'mcps', 'codex_yolo', 'opencode_yolo'):
+    for key in ('instructions', 'mcps', 'disabled_mcps', 'codex_yolo', 'opencode_yolo', 'reasoning_effort'):
         if key in body:
             p[key] = body[key]
     items = config.projects()
@@ -453,15 +477,27 @@ async def update_project(pid: str, req: Request):
     project_fields(body)
     if 'backend' in body and body['backend'] != s.backend:
         raise HTTPException(422, 'Create a new named agent to change backend; saved sessions belong to their original CLI')
+    from .backends import model_for, effort_for, validate_effort
+    try:
+        if body.get('model') or 'reasoning_effort' in body:
+            project = {**s.project, **body}
+            agent = {**s.agent}
+            if body.get('model'):
+                agent['model'] = body['model']
+            if 'reasoning_effort' in body:
+                agent['reasoning_effort'] = body['reasoning_effort']
+            model = model_for(s.backend, NODE, project, agent)
+            validate_effort(s.backend, effort_for(s.backend, NODE, project, agent), model, NODE)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    # Like model, the setting follows the active saved agent as well as the project default.
     if body.get('model'):
-        from .backends import model_for
-        try:
-            model_for(s.backend, NODE, agent={'backend': s.backend, 'model': body['model']})
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from exc
         s.agent['model'] = body['model']
+    if 'reasoning_effort' in body:
+        s.agent['reasoning_effort'] = body['reasoning_effort']
+    if body.get('model') or 'reasoning_effort' in body:
         s._save_state()
-    for k in ("name", "model", "host_tools", "conductor", "instructions", "mcps", "codex_yolo", "opencode_yolo"):
+    for k in ("name", "model", "host_tools", "conductor", "instructions", "mcps", "disabled_mcps", "codex_yolo", "opencode_yolo", "reasoning_effort"):
         if k in body:
             s.project[k] = body[k]
     config.save_projects([s.project if p["id"] == pid else p for p in config.projects()])
@@ -526,7 +562,8 @@ async def project_new_agent(pid: str, req: Request):
     body = await json_object(req)
     project_fields(body)
     try:
-        a = await s.new_agent(body.get("name") or None, body.get("session_id") or None, body.get('backend'), body.get('model'))
+        a = await s.new_agent(body.get("name") or None, body.get("session_id") or None, body.get('backend'), body.get('model'),
+                              body.get('reasoning_effort'))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     await notify_control({"type": "projects_changed", "node": NODE["name"]})
@@ -549,14 +586,17 @@ async def project_switch_agent(pid: str, aid: str, req: Request):
 
 
 @app.patch("/api/projects/{pid}/agents/{aid}")
-async def project_rename_agent(pid: str, aid: str, req: Request):
+async def project_update_agent(pid: str, aid: str, req: Request):
+    """Rename a saved agent or set its CLI session identity (the supported alternative to editing agents.json)."""
     s = get_session(pid)
     if not s:
         return JSONResponse({"error": "unknown project"}, status_code=404)
+    if not any(a['id'] == aid for a in s.agents):
+        raise HTTPException(404, 'Unknown agent')
     body = await json_object(req)
-    s.rename_agent(aid, str(body.get("name", "")).strip() or aid)
-    s.broadcast_status()
-    return {"ok": True}
+    project_fields(body)
+    s.update_agent_identity(aid, body)
+    return {"ok": True, "agent": next(a for a in s.agents if a['id'] == aid)}
 
 
 @app.delete("/api/projects/{pid}/agents/{aid}")
@@ -1185,7 +1225,7 @@ async def ws_control(ws: WebSocket):
 def _node_entry(name: str) -> dict | None:
     if name in ("local", NODE["name"]):
         return {"name": NODE["name"], "url": f"http://127.0.0.1:{NODE['port']}", "token": NODE["token"], "local": True}
-    return next((n for n in config.nodes() if n["name"] == name), None)
+    return next((n for n in config.nodes() if n["name"] == name), None) or sharing.peer(name)
 
 
 def _remote(n: dict, method: str, path: str, body=None, timeout=8.0, raw=False):
@@ -1216,6 +1256,7 @@ async def control_tree(req: Request = None):
             return {**n, "token": None, "reachable": False, "error": str(e)[:120], "projects": [],
                     "host": re.sub(r"^https?://", "", n["url"]).split(":")[0].split("/")[0]}
     out += await asyncio.gather(*(probe(n) for n in config.nodes()))
+    out += await sharing.tree_nodes()
     grant=getattr(req.state,'presenter',None) if req else None
     if grant:
         tiles=presenter_tiles(grant);names={t['node'] for t in tiles}
@@ -1279,17 +1320,37 @@ def _save_watch(key, record):
     write_json(config.HOME / 'watches.json', records)
 
 
-WATCH_CHECKIN_SECONDS = 240
+def _summary_interval(value):
+    if type(value) is not int or (value != 0 and not 300 <= value <= 86400):
+        raise HTTPException(422, 'summary_interval_seconds must be 0 (off) or 300–86400')
+    return value
+
+
+def _upgrade_watch(record):
+    # Old four-minute reminders were implicit, not a user preference. Silence them.
+    if record.get('monitor_version') != 2:
+        record['progress_seq'] = max(record.get('progress_seq',0), record.get('progress_delivery',{}).get('seq',0))
+        record.setdefault('created_at', record.get('deadline', time.time()+10800)-10800)
+        record.update(monitor_version=2, summary_interval_seconds=0)
+        record.pop('progress_delivery', None)
+        record.pop('next_checkin', None)
+    # Compatibility for rollback to releases that require this field. This runtime
+    # never uses a deadline; only a result or explicit cancellation ends a watch.
+    record['deadline'] = time.time()+10*365*86400
+    return record
 
 
 async def _watch_checkin(key, record, node_entry):
     """Persist a bounded progress message before delivery so retries keep one receipt."""
+    interval = record.get('summary_interval_seconds', 0)
+    if not interval:
+        return
     latest = _watch_records().get(key, {})
-    record['next_checkin'] = latest.get('next_checkin', record.get('next_checkin', time.time()+WATCH_CHECKIN_SECONDS))
+    record['next_checkin'] = latest.get('next_checkin', record.get('next_checkin', time.time()+interval))
     if not record.get('progress_delivery') and time.time() < record['next_checkin']:
         return
     c = get_session(record['recipient_project'])
-    if not c or c.active_id != record['recipient_agent']:
+    if not c or c.active_id != record['recipient_agent'] or getattr(c, 'status', 'idle') != 'idle':
         return
     if not record.get('progress_delivery'):
         try:
@@ -1304,14 +1365,14 @@ async def _watch_checkin(key, record, node_entry):
         seq = record.get('progress_seq', 0)+1
         record['progress_delivery'] = dict(seq=seq, text=(
             f"[delegate-progress] {record['node']}/{record['project']}; turn {record['turn_id']}\n"
-            f"Four minutes without a reported update. Requested: {record['brief']}\n{detail}\n"
+            f"Requested periodic summary. Task: {record['brief']}\n{detail}\n"
             "Give the human a concise factual check-in in the original response channel. Do not resend the task or claim completion. The watcher will deliver its outcome."))
         _save_watch(key, record)
     pending = record['progress_delivery']
     await c.send_user(pending['text'], kind='delegate_progress', origin=f"{record['node']}/{record['project']}",
         request_id=f"watch-progress-{key}-{pending['seq']}", expected_agent=record['recipient_agent'],
         request_source='automation', response_channel=record.get('response_channel','chat'), voice=record.get('voice'),presentation_display=record.get('presentation_display'),presentation_reset_revision=record.get('presentation_reset_revision',0))
-    record.update(progress_seq=pending['seq'], next_checkin=time.time()+WATCH_CHECKIN_SECONDS)
+    record.update(progress_seq=pending['seq'], next_checkin=time.time()+interval)
     record.pop('progress_delivery', None)
     _save_watch(key, record)
 
@@ -1320,29 +1381,33 @@ async def _watch_delegate(key, record):
     """Poll an immutable turn; durable outcomes survive controller restarts."""
     node, project, turn = record['node'], record['project'], record['turn_id']
     n = _node_entry(node)
-    record.setdefault('next_checkin', time.time()+WATCH_CHECKIN_SECONDS)
+    _upgrade_watch(record)
     try:
         r = record.get('result')
-        while r is None and time.time() < record['deadline']:
+        while r is None:
             try:
                 candidate = await asyncio.to_thread(_remote, n, 'GET',
                     f"/api/projects/{quote(project, safe='')}/result?wait=20&turn_id={quote(turn, safe='')}", timeout=25)
                 if candidate.get('turn_id') != turn:
                     raise ValueError('delegate did not return the requested turn')
+                record.update(checked_at=time.time(), monitor_state='connected', task_status=candidate.get('status','pending'))
+                record.pop('last_error', None)
+                record.pop('connection_failures', None)
                 if not candidate.get('pending'):
                     r = candidate
                     break
             except Exception as exc:
-                record['last_error'] = str(exc)[:240]
-                await asyncio.sleep(2)
+                record.update(last_error=str(exc)[:240], checked_at=time.time(), monitor_state='unreachable')
+                # A disconnected worker is not a failed task. Retry quietly with a cap.
+                record['connection_failures'] = record.get('connection_failures',0)+1
+                _save_watch(key, record)
+                await asyncio.sleep(min(60, 2**min(record['connection_failures'],6)))
+            _save_watch(key, record)
             try:
                 await _watch_checkin(key, record, n)
             except Exception as exc:
                 record['last_error'] = str(exc)[:240]
                 _save_watch(key, record)
-        if r is None:
-            r = {'turn_id':turn, 'is_error':True, 'subtype':'timeout',
-                 'result':'Delegate monitoring timed out; completion is unknown. Query this turn before retrying the command.'}
         record.update(result=r, status='awaiting_delivery')
         _save_watch(key, record)
         failed = bool(r.get('is_error'))
@@ -1355,7 +1420,7 @@ async def _watch_delegate(key, record):
             return
         text = r.get('result') or '(no text)'
         receipt = await c.send_user(
-            f"[delegate-result] {node}/{project} {'failed or needs inspection' if failed else 'completed'}; turn {turn}\n"
+            f"[delegate-result] {node}/{project} {'failed or needs inspection' if failed else 'returned a result'}; turn {turn}\n"
             f"Requested: {record['brief']}\n\n{text[:80000]}\n\nFull result: /n/{node}/api/projects/{project}/result?turn_id={quote(turn, safe='')}",
             kind='delegate_result', origin=f'{node}/{project}', request_id='watch-'+key,
             expected_agent=record['recipient_agent'],request_source='automation',response_channel=record.get('response_channel','chat'),voice=record.get('voice'),presentation_display=record.get('presentation_display'),presentation_reset_revision=record.get('presentation_reset_revision',0))
@@ -1382,6 +1447,8 @@ async def _watch_supervisor():
 
 
 def _restore_watches():
+    if _watch_settings_lock.locked():
+        return
     for key, record in _watch_records().items():
         if record['status'] in ('watching','awaiting_delivery') and key not in _watches and record.get('retry_at',0)<=time.time():
             _watches[key] = asyncio.create_task(_watch_delegate(key, record))
@@ -1393,19 +1460,22 @@ async def control_watch(req: Request):
     node, project, turn = (body.get(k) for k in ('node','project','turn_id'))
     if not all(isinstance(v,str) and 0 < len(v) <= 100 for v in (node,project,turn)) or not _node_entry(node):
         return JSONResponse({'error':'node, project and turn_id are required'},status_code=422)
+    interval = _summary_interval(body.get('summary_interval_seconds', 0))
     c = _conductor_session()
     if not c: return JSONResponse({'error':'no receiving conductor'},status_code=409)
     key = hashlib.sha256(json.dumps([node,project,turn]).encode()).hexdigest()
     record = _watch_records().get(key)
     if not record:
         record = dict(node=node, project=project, turn_id=turn, brief=str(body.get('brief') or '')[:200],
-                      deadline=time.time()+3*3600, status='watching', recipient_project=c.project['id'], recipient_agent=c.active_id,
-                      response_channel=c.response_channel(), next_checkin=time.time()+WATCH_CHECKIN_SECONDS,
+                      deadline=time.time()+10*365*86400, created_at=time.time(), monitor_version=2, summary_interval_seconds=interval, status='watching', recipient_project=c.project['id'], recipient_agent=c.active_id,
+                      response_channel=c.response_channel(), next_checkin=time.time()+interval,
                       presentation_reset_revision=getattr(c,'current_stage_reset_revision',None) if getattr(c,'current_stage_reset_revision',None) is not None else presentation_stage.last_reset_revision,
                       presentation_display=((c.ledger.get(c.current_turn) or {}).get('input',{}).get('presentation_display') if getattr(c,'current_turn',None) else None),
                       voice={'client_id':c.voice_target()} if c.voice_target() else None)
         _save_watch(key, record)
-    if record['status'] != 'relayed' and key not in _watches:
+    # Settings owns the record while a poll is being cancelled; its final restore
+    # will start any new registrations without reviving a cancelled one.
+    if record['status'] in ('watching','awaiting_delivery') and key not in _watches and not _watch_settings_lock.locked():
         _watches[key] = asyncio.create_task(_watch_delegate(key, record))
     return {'ok':True,'watching':key,'turn_id':turn,'status':record['status']}
 
@@ -1416,16 +1486,53 @@ async def control_watch_news(req: Request):
     updated = 0
     for key, record in _watch_records().items():
         if record['status']=='watching' and all(record.get(k)==body.get(k) for k in ('node','project','turn_id')):
-            record['next_checkin'] = time.time()+WATCH_CHECKIN_SECONDS
+            record['next_checkin'] = time.time()+record.get('summary_interval_seconds',0)
             _save_watch(key, record)
             updated += 1
     return {'ok':True, 'updated':updated}
 
 
+_watch_settings_lock = asyncio.Lock()
+
+
+@app.patch('/api/control/watches/{key}')
+async def control_watch_settings(key: str, req: Request):
+    body = await json_object(req)
+    if not body or set(body) - {'summary_interval_seconds', 'cancel'} or ('cancel' in body and type(body['cancel']) is not bool):
+        raise HTTPException(422, 'Supply summary_interval_seconds or cancel')
+    if 'summary_interval_seconds' in body:
+        _summary_interval(body['summary_interval_seconds'])
+    async with _watch_settings_lock:
+        record = _watch_records().get(key)
+        if not record:
+            raise HTTPException(404, 'Unknown task monitor')
+        if record['status'] not in ('watching','awaiting_delivery'):
+            raise HTTPException(409, 'This task monitor has already ended')
+        # Stop the poll before editing its durable record, so a result/check-in in
+        # flight cannot overwrite new settings. Accepted deliveries stay deduplicated.
+        task = _watches.get(key)
+        if task:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        record = _upgrade_watch(_watch_records().get(key, record))
+        if record['status'] not in ('watching','awaiting_delivery'):
+            raise HTTPException(409, 'This task monitor has already ended')
+        if body.get('cancel'):
+            record.update(status='cancelled', cancelled_at=time.time())
+        elif 'summary_interval_seconds' in body:
+            interval = body['summary_interval_seconds']
+            record.update(summary_interval_seconds=interval, next_checkin=time.time()+interval)
+            record['progress_seq'] = max(record.get('progress_seq',0), record.get('progress_delivery',{}).get('seq',0))
+            record.pop('progress_delivery', None)
+        _save_watch(key, record)
+    _restore_watches()
+    return {'ok':True, 'status':record['status'], 'summary_interval_seconds':record.get('summary_interval_seconds',0)}
+
+
 @app.get('/api/control/watches')
 async def control_watches():
     records = _watch_records()
-    return {'items':[f"{r['node']}/{r['project']}" for r in records.values() if r['status'] != 'relayed'],
+    return {'items':[f"{r['node']}/{r['project']}" for r in records.values() if r['status'] in ('watching','awaiting_delivery')],
             'records':records}
 
 
@@ -1602,6 +1709,106 @@ async def control_discover(subnet: str | None = None):
     return {"subnet": subnet, "found": [f for f in found if not f["self"]]}
 
 
+# ---- joining: a pairing code replaces copying tokens and certificates by hand
+_join_failures: deque = deque()
+
+
+def _join_throttle(ok: bool):
+    """A small global brake on guessing pairing secrets; legitimate joins are rare."""
+    now = time.time()
+    while _join_failures and _join_failures[0] < now - 600:
+        _join_failures.popleft()
+    if not ok:
+        _join_failures.append(now)
+    if len(_join_failures) > 30:
+        raise HTTPException(429, 'Too many failed join attempts; wait ten minutes')
+
+
+def _control_only():
+    if not NODE.get('control'):
+        raise HTTPException(404, 'Not a control node')
+
+
+@app.post("/api/control/invites")
+async def control_invite(req: Request):
+    """Mint a single-use pairing code; the caller relays it to the new machine."""
+    _control_only()
+    from . import join as fleet_join
+    body = await json_object(req, allow_empty=True)
+    try:
+        invite = fleet_join.create_invite(NODE, url=body.get('url') or None, ttl=body.get('ttl') or fleet_join.DEFAULT_TTL, note=body.get('note') or '')
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return invite
+
+
+@app.post("/api/control/join")
+async def control_join(req: Request):
+    """Issue a fleet certificate to a machine presenting a valid pairing secret; nothing is trusted yet."""
+    _control_only()
+    from . import join as fleet_join, fleet_ca
+    _join_throttle(True)
+    body = await json_object(req)
+    try:
+        record = fleet_join.take_invite(body.get('id'), body.get('secret'))
+    except ValueError as exc:
+        _join_throttle(False)
+        raise HTTPException(403, str(exc)) from exc
+    try:
+        name = fleet_ca.validate_name(body.get('name'))
+        if name == NODE['name']:
+            raise ValueError('That is this control node\'s own name; choose another machine name')
+        url = transport.origin({'url': str(body.get('url', ''))})
+        if not url.startswith('https://'):
+            raise ValueError('Machines must advertise an https:// origin')
+        token = body.get('token')
+        if not isinstance(token, str) or not 8 <= len(token) <= 200 or any(c.isspace() for c in token):
+            raise ValueError('Invalid machine token')
+        sans = fleet_ca.validate_sans(body.get('sans') or [urlsplit(url).hostname, name])
+        chain = await asyncio.to_thread(fleet_ca.sign_csr, body.get('csr'), name, sans)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    info = body.get('info') if isinstance(body.get('info'), dict) else {}
+    record['pending'] = {'name': name, 'url': url, 'token': token, 'issued': int(time.time()),
+                         'info': {k: info.get(k) for k in ('backend', 'clis', 'surface', 'host_tools', 'hub_tls_port')}}
+    fleet_join.update_invite(record)
+    return {'cert': chain, 'ca': fleet_ca.ca_paths()[1].read_text(),
+            'control': {'name': NODE['name'], 'url': record.get('url')}, 'node': {'name': name, 'url': url}}
+
+
+@app.post("/api/control/join/confirm")
+async def control_join_confirm(req: Request):
+    """Verify the machine over its new certificate, then record it and consume the code."""
+    _control_only()
+    from . import join as fleet_join
+    _join_throttle(True)
+    body = await json_object(req)
+    try:
+        record = fleet_join.take_invite(body.get('id'), body.get('secret'))
+    except ValueError as exc:
+        _join_throttle(False)
+        raise HTTPException(403, str(exc)) from exc
+    pending = record.get('pending')
+    if not pending:
+        raise HTTPException(409, 'Issue a certificate with the same code before confirming')
+    n = {'name': pending['name'], 'url': pending['url'], 'token': pending['token']}
+    loop = asyncio.get_event_loop()
+    try:
+        info = await loop.run_in_executor(None, lambda: _remote(n, "GET", "/api/node/info", timeout=8))
+        await loop.run_in_executor(None, lambda: _remote(n, "GET", "/api/projects", timeout=8))
+    except Exception as exc:
+        raise HTTPException(400, f"Cannot reach {n['url']} over verified TLS yet: {str(exc)[:160]}. Restart the machine's service and confirm again.") from exc
+    if info.get('name') != n['name']:
+        raise HTTPException(400, f"{n['url']} answered as {info.get('name')!r}, not {n['name']!r}; restart its service so the new name and certificate apply")
+    fleet_join.take_invite(body.get('id'), body.get('secret'), consume=True)
+    items = [x for x in config.nodes() if x["name"] != n["name"]]
+    items.append(n)
+    config.save_nodes(items)
+    _start_relays()
+    await notify_control({"type": "nodes_changed"})
+    return {"ok": True, "node": {"name": n["name"], "url": n["url"]}, "control": {"name": NODE["name"]}, "info": info}
+
+
 @app.get("/api/control/nodes")
 async def control_nodes():
     return {"items": [{**n, "token": "•••" if n.get("token") else ""} for n in config.nodes()]}
@@ -1683,6 +1890,8 @@ async def proxy_http(node: str, path: str, req: Request):
     try:
         r = await asyncio.get_event_loop().run_in_executor(None, do)
         return Response(content=r.content, status_code=r.status_code, media_type=r.headers.get("content-type", "application/json"))
+    except HTTPException as e:
+        return JSONResponse({"error":e.detail},status_code=e.status_code)
     except Exception as e:
         return JSONResponse({"error": str(e)[:200]}, status_code=502)
 
@@ -1698,6 +1907,9 @@ async def proxy_ws(ws: WebSocket, node: str, path: str):
         return
     query=urlencode([(key,value) for key,value in ws.query_params.multi_items() if key!='token'])
     upstream_path='/ws/'+path+('?' + query if query else '')
+    if n.get('shared_id'):
+        await sharing.shared_chat(ws,n,upstream_path,ws_authorized)
+        return
     pumps = []
     try:
         async with transport.websocket(n,upstream_path,max_size=32 * 1024 * 1024,ping_interval=20) as up:
@@ -1798,6 +2010,9 @@ def main():
     while t.is_alive():
         t.join(0.5)
 
+
+import sys
+sharing.install_owner_routes(app,sys.modules[__name__])
 
 if __name__ == "__main__":
     main()

@@ -255,3 +255,23 @@ licences, with a written source offer for the AGPL ones, in
 | File storage / sync                     | 🚧 planned |
 | Agents (several per box, own account + E2EE room each) | ✅ working |
 | Agentnode Conductor and Docker worker   | ✅ Codex; additional machines connect through the fleet |
+
+### Sharing an agent with another Conductor
+
+In the Agents UI, open **Sharing**, enable Tor, then select an owned agent and
+choose **Share**. Create a separate invitation for each recipient. Send the code
+through your private Lodge/Bolt conversation; the recipient imports it through
+Sharing on their own Conductor. The same live conversation then appears under
+Shared with me, without giving them access to the owner's fleet or VPN.
+
+Observers can read history and Surface; collaborators can also send instructions;
+managers can additionally control an already approved agent's lifecycle. Sharing
+includes the existing conversation. Instructions run with that agent's existing
+tools and permissions. The owner can revoke recipients separately; accepted work
+continues unless interrupted. The shared Surface is read-only and uses an isolated
+origin. Text attachments and automatic invitation delivery are not included yet.
+
+Update both Lodge and Bolt for shared Surface forwarding. The agent owner onion
+adds ports 8807–8822, mapped to local relays 8901–8916 (plus the instance offset).
+The new inter-Conductor sharing onion exposes only scoped sharing endpoints;
+existing owner client-auth keys are never included in invitations.
