@@ -59,11 +59,14 @@ async def start():
     private_dir(ROOT);private_dir(ROOT/'data');private_dir(ROOT/'service')
     # All targets are local, fixed by the operator's node configuration.
     torrc=ROOT/'torrc'
-    atomic_text(torrc,f'DataDirectory "{ROOT / "data"}"\nSocksPort 127.0.0.1:{settings["socks_port"]}\nHiddenServiceDir "{ROOT / "service"}"\nHiddenServicePort 80 127.0.0.1:{settings["gateway_port"]}\nSafeLogging 1\nLog notice file "{ROOT / "tor.log"}"\n')
+    atomic_text(torrc,f'DataDirectory "{ROOT / "data"}"\nSocksPort 127.0.0.1:{settings["socks_port"]}\nHiddenServiceDir "{ROOT / "service"}"\nHiddenServicePort 80 127.0.0.1:{settings["gateway_port"]}\nSafeLogging 1\nLog notice stdout\n')
     if TOR is None or TOR.returncode is not None:
         READY=False
         atomic_text(ROOT/'tor.log','')
-        TOR=await asyncio.create_subprocess_exec(executable,'-f',str(torrc),stdout=asyncio.subprocess.DEVNULL,stderr=asyncio.subprocess.DEVNULL)
+        # Tor's Log option has its own parsing rules; do not quote a log filename
+        # inside torrc. Capture early startup errors as well as normal notices.
+        with (ROOT/'tor.log').open('ab') as output:
+            TOR=await asyncio.create_subprocess_exec(executable,'-f',str(torrc),stdout=output,stderr=asyncio.subprocess.STDOUT)
     for key,r in REGISTRY.read()['imports'].items():
         if not r.get('pending'):await ensure_import(key)
 

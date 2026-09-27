@@ -39,7 +39,7 @@ async function mountSharedSurface(t){
       port=bridge?Number(location.port)+18+data.slot:8900+data.slot+(Number(new URLSearchParams(location.search).get('surface_offset'))||0);
     }
     if(!port)throw Error('This Conductor needs HTTPS configured for shared Surface.');
-    const url=`${location.protocol}//${location.hostname}:${port}/?embed=1&view=presenter&ws=${encodeURIComponent(data.workspace)}&presentation=shared`;
+    const url=`${location.protocol}//${location.hostname}:${port}/?bootstrap=1&embed=1&view=presenter&ws=${encodeURIComponent(data.workspace)}&presentation=shared`;
     if(tb.dataset.src===url)return;
     const frame=document.createElement('iframe');frame.title='Shared agent Surface';
     frame.src=url+'#access='+encodeURIComponent(data.access);frame.sandbox='allow-scripts allow-same-origin allow-downloads';
