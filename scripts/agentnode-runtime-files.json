@@ -33,7 +33,7 @@
     "agentnode/session.py": "216797fef0d3c59ab143ed97d58410bcb8d109cfe49e5606b61b07c335ef0e76",
     "agentnode/setup.py": "d89f0b751533302e5140147c905a48c77beed1d0191029308f5192b84236b93a",
     "agentnode/sharing.py": "de8d3d05bfe7cc356eab5299dab85d14bb56ab42f1eff6f3acd953608236ae69",
-    "agentnode/sharing_runtime.py": "d602a6b80576b46b267bff4829f6c8e8b71c31c527ada59f042e7ae9dce2b258",
+    "agentnode/sharing_runtime.py": "246e5eb65500ff9f26c29eda804ef0a7d9a661c9b5f0b3a9773f73f4d2d60b60",
     "agentnode/speech_client.py": "1156f820102b04ac7d323f538d957fc0e5cb60e93f645845ba04435a961b5270",
     "agentnode/storage.py": "d0b32ae62cb2d241b346b78d624e728c4908c63e30cbbae370f9811e6cdfa51c",
     "agentnode/surface_hub.py": "a314d74b1124751d10039c9732be812331691f63584d8dc4e0a4b611926dee80",
