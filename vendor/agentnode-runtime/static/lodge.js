@@ -363,8 +363,8 @@ function enterLodge() {
   stageActions.append(reset,choose,sharing,settings);document.querySelector('header').append(stageActions);
   const head=document.getElementById('chatHead'),identity=lodgeElement('div',undefined,'lodge-chat-identity');
   const title=lodgeElement('strong','Conductor');title.id='lodgeChatTitle';const subtitle=lodgeElement('span');subtitle.id='lodgeChatSubtitle';identity.append(title,subtitle);
-  const share=lodgeButton('Share',openShareAgent);share.id='lodgeShareAgent';
-  head.prepend(identity);head.append(share,lodgeButton('Manage',lodgeManageAgent));
+  document.getElementById('btnShareAgent').textContent='Share';
+  head.prepend(identity);head.append(lodgeButton('Manage',lodgeManageAgent));
   const stop=lodgeButton('Stop',()=>sendCmd({type:'interrupt'}));stop.id='lodgeStop';head.append(stop);
   const gate=lodgeElement('div',undefined,'lodge-chat-gate');gate.id='lodgeChatGate';gate.setAttribute('role','status');document.getElementById('composer').before(gate);
   const browse=lodgeElement('section');browse.id='lodgeBrowse';browse.hidden=true;browse.setAttribute('aria-label','Browse agents');

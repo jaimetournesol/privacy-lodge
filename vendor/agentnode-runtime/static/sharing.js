@@ -8,7 +8,7 @@ function sharedControls(){
   const note=document.getElementById('sharedAgentNote');
   note.hidden=!shared;
   note.textContent=shared&&node.error?node.error:shared?`Shared agent · ${node.role} · messages sent as ${node.recipient}. ${node.role==='observer'?'You can read the conversation and Surface.':'Everyone with access shares this conversation and its command queue.'}`:'';
-  for(const id of ['btnShareAgent','lodgeShareAgent']){const button=document.getElementById(id);if(button)button.hidden=shared||!chatSel||READ_ONLY;}
+  document.getElementById('btnShareAgent').hidden=shared||!chatSel||READ_ONLY;
 }
 async function renderSharing(){
   const box=document.getElementById('sharingList'),state=document.getElementById('sharingStatus');
