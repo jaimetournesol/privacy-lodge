@@ -5,7 +5,7 @@ The upstream Agentnode repository remains private. Its repository metadata,
 Android app, tests, development tools, production deployment scripts, speech worker,
 and local state are not distributed here.
 
-Source revision: `54a1b9867d674934feda34cc1d583ffafd1242f3`.
+Source revision: `2066d057bb29c0627216f5fed816cbd6e381d3f2`.
 
 `scripts/agentnode-runtime-files.json` is the exact allowlist and SHA-256 inventory.
 Normal builds read this snapshot and verify every file against that inventory.

@@ -248,11 +248,13 @@ async def until_revoked(ws,record,valid,upstream,*,surface=False,identity=None):
             if surface and message.get('type')=='resync':await upstream.send('{"type":"resync"}')
             elif message.get('type')=='ping':await ws.send_json({'type':'pong'})
     async def expiry():
-        tick=0
         while True:
-            await asyncio.sleep(1);valid();tick+=1
-            if identity and tick%10==0:await identity()
+            await asyncio.sleep(1);valid()
+    async def identities():
+        while True:
+            await identity();await asyncio.sleep(10)
     tasks=[asyncio.create_task(f()) for f in (down,up,expiry)]
+    if identity:tasks.append(asyncio.create_task(identities()))
     try:await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED)
     finally:
         for t in tasks:t.cancel()
@@ -275,13 +277,15 @@ def gateway_app(gateway=None):
         return g.registry.redeem(b.get('id'),b.get('secret'),b.get('credential'))
     @app.get('/v1/status')
     async def status(req:Request):
-        r=grant(req);s=await g.status(r)
+        r=grant(req);s=await g.status(r);grant(req)
         return dict(status_view(s),name=r['name'],role=r['role'],recipient=r['recipient'],expires=r['expires'])
     @app.get('/v1/history')
     async def history(req:Request):
         r=grant(req);await g.status(r)
         if set(req.query_params)-{'before','after','limit','event'}:raise HTTPException(422,'Unsupported history query')
-        return await g.request(r,'GET',f"/api/projects/{r['project']}/agents/{r['agent']}/history?"+str(req.query_params))
+        result=await g.request(r,'GET',f"/api/projects/{r['project']}/agents/{r['agent']}/history?"+str(req.query_params))
+        grant(req)
+        return result
     @app.get('/v1/result')
     async def result(req:Request):
         r=grant(req);await g.status(r)

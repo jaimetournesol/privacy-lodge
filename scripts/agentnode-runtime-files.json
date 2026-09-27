@@ -32,7 +32,7 @@
     "agentnode/server.py": "c2cfc5a60516448625a0cad7d97b38671e02108d37e2bac28e6c12f7b07b7063",
     "agentnode/session.py": "216797fef0d3c59ab143ed97d58410bcb8d109cfe49e5606b61b07c335ef0e76",
     "agentnode/setup.py": "d89f0b751533302e5140147c905a48c77beed1d0191029308f5192b84236b93a",
-    "agentnode/sharing.py": "d008cacb69b0807b79f64254e758695da7ba05b6794ad640e591aa2ab2b7b2f5",
+    "agentnode/sharing.py": "de8d3d05bfe7cc356eab5299dab85d14bb56ab42f1eff6f3acd953608236ae69",
     "agentnode/sharing_runtime.py": "d602a6b80576b46b267bff4829f6c8e8b71c31c527ada59f042e7ae9dce2b258",
     "agentnode/speech_client.py": "1156f820102b04ac7d323f538d957fc0e5cb60e93f645845ba04435a961b5270",
     "agentnode/storage.py": "d0b32ae62cb2d241b346b78d624e728c4908c63e30cbbae370f9811e6cdfa51c",
