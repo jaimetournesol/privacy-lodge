@@ -314,7 +314,8 @@ def gateway_app(gateway=None):
     @app.get('/v1/surface/{path:path}')
     async def surface(path:str,req:Request):
         r=grant(req);check_surface_path(path);node,workspace=await g.surface(r)
-        q={k:v for k,v in req.query_params.items() if k not in ('access','token','ws')};q['ws']=workspace
+        if req.query_params.get('_shared_ws',workspace)!=workspace:raise HTTPException(403,'The shared workspace changed; reopen Surface')
+        q={k:v for k,v in req.query_params.items() if k not in ('access','token','ws','_shared_ws')};q['ws']=workspace
         response=await asyncio.to_thread(transport.request,node,'GET','/'+path+'?'+urlencode(q),None,30)
         grant(req)
         return Response(response.content,status_code=response.status_code,headers={k:v for k,v in response.headers.items() if k.lower() in ('content-type','content-disposition')})
@@ -336,6 +337,7 @@ def gateway_app(gateway=None):
     async def surface_ws(ws:WebSocket):
         try:
             r=grant(ws);node,workspace=await g.surface(r)
+            if ws.query_params.get('ws',workspace)!=workspace:raise HTTPException(403,'The shared workspace changed')
             if ws.headers.get('origin'):raise HTTPException(403,'Conductor connection required')
             await ws.accept()
             async with transport.websocket(node,'/ws?'+urlencode({'ws':workspace,'view':'presenter','presentation':'shared'}),max_size=4*1024*1024) as upstream:
@@ -377,10 +379,10 @@ def surface_app(key):
             try:jar=SimpleCookie();jar.load(headers.get('cookie',''));value=jar[cookie_name].value
             except Exception:value=''
         claim=auth.claims(value,config.node()['token'],'shared-surface')
-        if not claim or claim.get('import_id')!=key:raise HTTPException(401,'Reopen this shared Surface from Conductor')
+        if not claim or claim.get('import_id')!=key or not identifier(claim.get('workspace')):raise HTTPException(401,'Reopen this shared Surface from Conductor')
         r=REGISTRY.imported(key)
         if r['expires']<=time.time():raise HTTPException(401,'Shared agent access expired')
-        return r
+        return dict(r,workspace_scope=claim['workspace'])
     def trusted(headers,scheme):
         if headers.get('sec-fetch-site')=='cross-site':return False
         origin=headers.get('origin')
@@ -398,22 +400,25 @@ def surface_app(key):
     @app.post('/api/auth/session')
     async def login(req:Request):
         r=access(req.headers,req.query_params)
-        await remote_json(r,'GET','/v1/status')
+        status=await remote_json(r,'GET','/v1/status')
+        if status.get('surface_ws')!=r['workspace_scope']:raise HTTPException(403,'The shared workspace changed; reopen Surface')
         response=JSONResponse({'ok':True})
         response.set_cookie(cookie_name,req.headers.get('x-agentnode-token',''),max_age=21600,secure=req.url.scheme=='https',httponly=True,samesite='strict')
         return response
     @app.get('/{path:path}')
     async def read(path:str,req:Request):
-        try:r=access(req.headers,req.query_params)
+        try:
+            if not path and req.query_params.get('bootstrap')=='1':raise HTTPException(401,'Exchange the new Surface ticket')
+            r=access(req.headers,req.query_params)
         except HTTPException:
             if path:raise
             return Response('''<!doctype html><meta name="referrer" content="no-referrer"><p id="status">Open this Surface from Conductor.</p><script>
 const token=new URLSearchParams(location.hash.slice(1)).get('access');
-if(token)fetch('/api/auth/session',{method:'POST',headers:{'X-AgentNode-Token':token}}).then(r=>{if(!r.ok)throw Error('Access expired. Reopen from Conductor.');location.reload();}).catch(e=>document.querySelector('#status').textContent=e.message);
+if(token)fetch('/api/auth/session',{method:'POST',headers:{'X-AgentNode-Token':token}}).then(r=>{if(!r.ok)throw Error('Access expired. Reopen from Conductor.');const url=new URL(location);url.searchParams.delete('bootstrap');history.replaceState(null,'',url);location.reload();}).catch(e=>document.querySelector('#status').textContent=e.message);
 </script>''',media_type='text/html')
         check_surface_path(path)
-        query={k:v for k,v in req.query_params.items() if k not in ('access','token','ws')}
-        query.update(view='presenter',embed='1',presentation='shared')
+        query={k:v for k,v in req.query_params.items() if k not in ('access','token','ws','_shared_ws','bootstrap')}
+        query.update(view='presenter',embed='1',presentation='shared',_shared_ws=r['workspace_scope'])
         try:response=await asyncio.to_thread(remote,r,'GET','/v1/surface/'+path+'?'+urlencode(query))
         except Exception:raise HTTPException(502,'Shared Surface is unavailable over Tor') from None
         return Response(response.content,status_code=response.status_code,headers={k:v for k,v in response.headers.items() if k.lower() in ('content-type','content-disposition')})
@@ -422,7 +427,7 @@ if(token)fetch('/api/auth/session',{method:'POST',headers:{'X-AgentNode-Token':t
         try:
             if not trusted(ws.headers,ws.url.scheme):raise HTTPException(403,'Untrusted browser origin')
             r=access(ws.headers,ws.query_params);await ws.accept()
-            async with transport.DirectConnect('ws'+onion_origin(r['url'])[4:]+'/v1/surface-ws',
+            async with transport.DirectConnect('ws'+onion_origin(r['url'])[4:]+'/v1/surface-ws?'+urlencode({'ws':r['workspace_scope']}),
                     additional_headers={'Authorization':'Bearer '+r['credential']},proxy=socks_url(),max_size=4*1024*1024) as upstream:
                 await until_revoked(ws,r,lambda:access(ws.headers,ws.query_params),upstream,surface=True)
         except Exception:pass
@@ -483,4 +488,4 @@ async def imported_surface_access(key, workspace=None):
     if not assigned:raise HTTPException(404,'The shared agent has no Surface yet')
     if workspace is not None and workspace!=assigned:raise HTTPException(403,'The shared workspace changed')
     ports=await ensure_import(key)
-    return dict(ports,workspace=assigned,access=auth.capability(config.node()['token'],'shared-surface','presenter',import_id=key))
+    return dict(ports,workspace=assigned,access=auth.capability(config.node()['token'],'shared-surface','presenter',import_id=key,workspace=assigned))
