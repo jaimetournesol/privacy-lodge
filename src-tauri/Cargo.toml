@@ -1,7 +1,7 @@
 [package]
 name = "privacy-lodge"
 default-run = "privacy-lodge"
-version = "0.2.0"
+version = "0.2.1"
 description = "Privacy Lodge — your own private box"
 authors = ["Tournesol"]
 edition = "2021"

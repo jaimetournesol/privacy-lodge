@@ -67,6 +67,9 @@ jobs:
       - name: Stage reviewed Agentnode runtime
         run: pnpm stage:agentnode
 
+      - name: Build staged Agentnode runtime image
+        run: docker build -f src-tauri/agentnode-runtime/docker/Dockerfile -t privacy-lodge-agentnode:ci src-tauri/agentnode-runtime
+
       # frontend must be built first: tauri's generate_context! embeds ../build
       - name: cargo check
         working-directory: src-tauri

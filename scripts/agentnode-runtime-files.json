@@ -90,6 +90,7 @@
     "vendor/surface/server/auth.ts": "030a7f13b92718b93a073035b237edfc65940bc9153e01a53916637e571087b1",
     "vendor/surface/server/external-agent.ts": "a76c13002447e0abb7f5f73274705120c3adde63dd4e75a73fd034a574769900",
     "vendor/surface/server/index.ts": "046dd9e94f269cb554e21ff3ec412a3b780c2dc3377ac867799b805c5fb6348f",
+    "vendor/surface/server/local-apps.ts": "bd190634ae21be1545f82212e339cf3443448885f65b04a90cc782a31589a372",
     "vendor/surface/server/mcp-stdio.mjs": "b87079eadff820b35df79d4447d0961e66b71122141c63e7995aa8db3ef203fe",
     "vendor/surface/server/opencode.ts": "aaa50e5934a8afec40acefba2178d7d75b28282a4e87906f16e095c81a6eaf46",
     "vendor/surface/server/presentation-runtime.js": "90c278fd43e39fabaa07b352b9e4c9ad57dd4606dd7c22659399ea64c0aa02f8",
