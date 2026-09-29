@@ -11,7 +11,7 @@ Work through a feature branch and PR. Run `pnpm check`, `cargo test --locked` in
 and `./scripts/test-pl-box.sh`. CI repeats these checks and builds complete Linux
 installers. The restore smoke tests use throwaway volumes only.
 
-Agentnode remains private. Public builds use the 124-file reviewed snapshot under
+Agentnode remains private. Public builds use the 131-file reviewed snapshot under
 `vendor/agentnode-runtime`, never an implicit sibling checkout. The exact file list
 and SHA-256 inventory are `scripts/agentnode-runtime-files.json`; provenance and
 refresh rules are in `vendor/AGENTNODE.md`. Review the snapshot and scan it and all
@@ -55,3 +55,33 @@ upgraded database. Restore a compatible pre-upgrade backup if rollback is requir
 
 The app's custom updater uses `update.json`, `update.json.sig` and
 `update.json.pqsig`. Tauri/minisign `latest.json` is not the active update mechanism.
+
+## CI candidates and local promotion
+
+Every PR builds and starts two disposable Docker fleets. Checks cover independent
+credentials, rejected unauthorized API access, authenticated Surfaces, worker
+connectivity and credential persistence after restart. No host tester volumes or
+personal devices are used. `scripts/test-runtime-docker.py --federation` additionally
+provisions two synthetic accounts and verifies two-way messages over Tor; this is
+transport acceptance, not proof of Android E2EE or video-call behavior.
+
+The Release workflow first runs the complete CI workflow. It builds only `.deb`
+and `.AppImage`, exercises the matching Docker images, then publishes immutable
+`ghcr.io/jaimetournesol/privacy-lodge-{box,agent}:sha-<commit>` candidates for version
+tags. A manual workflow dispatch exercises the same builds without publishing
+images or creating a release. Signing keys remain on the release machine.
+
+From a clean checkout of the release tag, run:
+
+```sh
+python3 scripts/release/finish.py 0.2.2 --notes /private/release-notes.md
+# After the preflight succeeds, sign and publish the verified candidate:
+python3 scripts/release/finish.py 0.2.2 --notes /private/release-notes.md --publish
+```
+
+The version is an example, not a new release request. This command requires a
+successful tagged release workflow and a draft release. It checks the source tag,
+Docker candidates and uploaded asset hashes, signs locally, promotes matching
+images to Docker Hub, and only then publishes. Already published releases are
+rejected. If interrupted, inspect the draft and registry tags before resuming.
+Local `gh`/Docker authentication and the existing private signing keys are required.

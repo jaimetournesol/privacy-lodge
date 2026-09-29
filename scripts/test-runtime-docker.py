@@ -18,6 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--box-image', required=True)
     parser.add_argument('--agent-image', required=True)
+    parser.add_argument('--federation', action='store_true', help='Provision synthetic accounts and verify messages across two onion boxes')
     args = parser.parse_args()
     project = 'pl-ci-' + secrets.token_hex(8)
     services, volumes = {}, {}
@@ -83,9 +84,69 @@ print(hashlib.sha256(n['token'].encode()).hexdigest())
             before = ready()
             compose('restart')
             assert ready() == before, 'Runtime credentials changed across restart'
+            if args.federation:
+                federation(compose)
             print('PASS: two isolated fleets; four independent credentials; unauthorized Surface access rejected; authenticated APIs/Surfaces; worker connectivity; unprovisioned setup; restart persistence')
         finally:
             compose('down','--volumes','--remove-orphans')
+
+
+def federation(compose):
+    """Exercise actual Tor federation, with generated accounts and synthetic text only."""
+    import urllib.parse
+    rpc = r'''
+import json,sys,urllib.request
+x=json.load(sys.stdin)
+headers=x.get('headers',{})
+body=x.get('body')
+if isinstance(body,dict):
+ body=json.dumps(body).encode();headers['Content-Type']='application/json'
+elif body is not None:body=body.encode()
+req=urllib.request.Request('http://127.0.0.1:'+str(x.get('port',8118))+x['path'],data=body,headers=headers,method=x.get('method','GET'))
+with urllib.request.urlopen(req,timeout=90) as r:
+ data=r.read().decode();print(json.dumps({'data':data}))
+'''
+    def request(fleet, path, body=None, method='GET', token=None, port=8118, headers=None):
+        h=dict(headers or {})
+        if token:h['Authorization']='Bearer '+token
+        wire={'path':path,'body':body,'method':method,'port':port,'headers':h}
+        out=compose('exec','-T',fleet+'-control','python3','-c',rpc,input=json.dumps(wire)).stdout
+        value=json.loads(out)['data']
+        try:return json.loads(value)
+        except ValueError:return value
+    def until(fn, seconds=480):
+        deadline=time.monotonic()+seconds
+        while time.monotonic()<deadline:
+            try:return fn()
+            except (subprocess.CalledProcessError, AssertionError, KeyError):time.sleep(5)
+        raise RuntimeError('Synthetic Tor federation timed out')
+    passwords={f:secrets.token_urlsafe(24) for f in ('a','b')}
+    import re
+    for f in passwords:
+        page=request(f,'/',port=8470)
+        nonce=re.search(r"'X-Lodge-Setup':'([a-f0-9]{64})'",page).group(1)
+        request(f,'/provision',urllib.parse.urlencode({'username':'ci'+f,'password':passwords[f],'box_name':'CI '+f}),
+            'POST',port=8470,headers={'X-Lodge-Setup':nonce,'Content-Type':'application/x-www-form-urlencoded'})
+    sessions={f:until(lambda f=f:request(f,'/_matrix/client/v3/login',{'type':'m.login.password','user':'ci'+f,
+        'password':passwords[f],'device_id':'ISOLATED_CI'},'POST')) for f in passwords}
+    quote=lambda s:urllib.parse.quote(s,safe='')
+    for f,peer in [('a','b'),('b','a')]:
+        request(f,'/_matrix/client/v3/user/'+quote(sessions[f]['user_id'])+'/account_data/ai.tournesol.privacylodge.pairings',
+            {'onions':[sessions[peer]['user_id'].split(':',1)[1]]},'PUT',sessions[f]['access_token'])
+    # The ordinary box reconciler installs the consent recorded through Matrix account data.
+    time.sleep(20)
+    room=until(lambda:request('a','/_matrix/client/v3/createRoom',{'preset':'private_chat'},'POST',sessions['a']['access_token']))['room_id']
+    until(lambda:request('a','/_matrix/client/v3/rooms/'+quote(room)+'/invite',{'user_id':sessions['b']['user_id']},'POST',sessions['a']['access_token']))
+    until(lambda:request('b','/_matrix/client/v3/join/'+quote(room),{},'POST',sessions['b']['access_token']))
+    for sender,receiver in [('a','b'),('b','a')]:
+        marker='Synthetic CI delivery '+secrets.token_hex(8)
+        request(sender,'/_matrix/client/v3/rooms/'+quote(room)+'/send/m.room.message/'+secrets.token_hex(8),
+            {'msgtype':'m.text','body':marker},'PUT',sessions[sender]['access_token'])
+        def delivered():
+            data=request(receiver,'/_matrix/client/v3/rooms/'+quote(room)+'/messages?dir=b&limit=20',token=sessions[receiver]['access_token'])
+            assert any(e.get('content',{}).get('body')==marker for e in data['chunk'])
+        until(delivered,180)
+    print('PASS: synthetic two-way messages across independently provisioned onion boxes (transport acceptance, not Android E2EE/call acceptance)')
 
 if __name__ == '__main__':
     try:
