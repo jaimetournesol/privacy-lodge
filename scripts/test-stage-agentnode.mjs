@@ -6,6 +6,19 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
+test('reviewed runtime contains every local asset needed to render Conductor', async () => {
+  const source = new URL('../vendor/agentnode-runtime/', import.meta.url);
+  const reviewed = JSON.parse(await fs.readFile(new URL('./agentnode-runtime-files.json', import.meta.url), 'utf8'));
+  const html = await fs.readFile(new URL('static/index.html', source), 'utf8');
+  const assets = [...html.matchAll(/(?:src|href)="\/static\/([^"\n]+)"/g)].map(match => `static/${match[1]}`);
+  assert.ok(assets.length > 0, 'Conductor asset references must be checked');
+  for (const name of assets) {
+    assert.ok(Object.hasOwn(reviewed.files, name), `${name} is missing from the reviewed runtime manifest`);
+    const bytes = await fs.readFile(new URL(name, source));
+    assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), reviewed.files[name], name);
+  }
+});
+
 test('runtime staging is reproducible, excludes extra files, and rejects tampering and symlinks', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'lodge-stage-test-'));
   try {
