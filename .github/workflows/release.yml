@@ -1,5 +1,5 @@
 # Release — tag-triggered (v*) cross-platform build via tauri-action.
-# Produces a DRAFT GitHub release with installers for all four targets.
+# Produces a DRAFT release with verified Linux installers and immutable Docker candidates.
 #
 # Signing/notarization is scaffolded but COMMENTED OUT below — see the
 # TODO(G4/G5) markers and scripts/release/README.md for what is blocked
@@ -18,9 +18,14 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
+  validate:
+    uses: ./.github/workflows/ci.yml
   build:
+    needs: validate
+    timeout-minutes: 40
     # LINUX ONLY — deliberately, until the box can actually RUN elsewhere.
     #
     # A Privacy Lodge box is the app PLUS its sidecars, and the essential ones publish
@@ -38,7 +43,7 @@ jobs:
         include:
           - name: linux-x64
             runner: ubuntu-24.04
-            args: ''
+            args: '--bundles deb appimage'
             rust_targets: ''
 
     runs-on: ${{ matrix.runner }}
@@ -46,7 +51,7 @@ jobs:
       COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Install Tauri Linux dependencies
         if: matrix.name == 'linux-x64'
@@ -72,7 +77,7 @@ jobs:
           pnpm --version
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: pnpm
@@ -173,3 +178,33 @@ jobs:
           #
           #   --config '{"bundle":{"windows":{"signCommand":"trusted-signing-cli -e https://weu.codesigning.azure.net -a <ACCOUNT_NAME> -c <CERT_PROFILE_NAME> %1"}}}'
           # ----------------------------------------------------------------
+
+      - name: Build release Docker images
+        run: |
+          cargo build --locked --release --manifest-path src-tauri/Cargo.toml --bin pl-crypt
+          PRIVACY_LODGE_BIN_DIR="$PWD/src-tauri/sidecars" IMAGE=privacy-lodge-box:candidate docker/build.sh
+          docker build -f src-tauri/agentnode-runtime/docker/Dockerfile -t privacy-lodge-agentnode:candidate src-tauri/agentnode-runtime
+      - name: Verify release runtimes
+        run: python3 scripts/test-runtime-docker.py --box-image privacy-lodge-box:candidate --agent-image privacy-lodge-agentnode:candidate
+      - name: Publish immutable candidates to GHCR
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          for role in box agent; do
+            source=privacy-lodge-box:candidate
+            if [ "$role" = agent ]; then source=privacy-lodge-agentnode:candidate; fi
+            target="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/privacy-lodge-$role:sha-$GITHUB_SHA"
+            docker tag "$source" "$target"
+            docker push "$target"
+          done
+      - name: Upload release evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-linux-candidate
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
+            src-tauri/agentnode-runtime/manifest.json
+          if-no-files-found: error
