@@ -5,19 +5,24 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 35
     env:
       COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Install Tauri Linux dependencies
         run: |
@@ -36,7 +41,7 @@ jobs:
           pnpm --version
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 22
           cache: pnpm
@@ -92,8 +97,15 @@ jobs:
       - name: Tauri build (deb + AppImage)
         run: pnpm tauri build --bundles deb appimage
 
+      - name: Build complete Docker box
+        run: |
+          cargo build --locked --release --manifest-path src-tauri/Cargo.toml --bin pl-crypt
+          PRIVACY_LODGE_BIN_DIR="$PWD/src-tauri/sidecars" IMAGE=privacy-lodge-box:ci docker/build.sh
+      - name: Isolated runtime acceptance
+        run: python3 scripts/test-runtime-docker.py --box-image privacy-lodge-box:ci --agent-image privacy-lodge-agentnode:ci
+
       - name: Upload bundles
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: privacy-lodge-linux-x64
           if-no-files-found: error
