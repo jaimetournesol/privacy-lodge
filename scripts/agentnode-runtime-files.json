@@ -61,6 +61,7 @@
     "run-surface-hub.sh": "3f475c69529062a36c4c01e10fdb54810cc4fd7f03063e00090d24912498eba5",
     "run.sh": "1501f8eda3806d8482f146e53ae1080cde7c76e94fed7440aa407cb1d6fcdd08",
     "scripts/install_surface_presentation.py": "83233170b0291c4fb003c03104a7e326c1809e999e30a18f5edd3820da49468c",
+    "static/delegations.js": "ad38c4940b31f318b84635738a455f22d669d9588e03eae4354101bdb1d90a0a",
     "static/fleet.css": "b7488dc04f1d5e1e64277c6b49df0e4d1985e534cadc16c01692fdb0153209bc",
     "static/fleet.js": "be84f030b9dfaf422aec77aaecbecb6c44c6c5326cbdd743fce6d5d57ad7cf23",
     "static/history-view.js": "b4c5ac94269ca919bbd9f1efa647b674e50c43322d4935360cf6e53f8d1b6f4f",

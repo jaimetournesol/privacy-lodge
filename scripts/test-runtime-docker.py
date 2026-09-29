@@ -60,6 +60,14 @@ assert get('/api/surface/workspaces')[0] in (401,403)
 assert get('/api/surface/workspaces', 'invalid-ci-token')[0] in (401,403)
 assert get('/healthz',n['token'])[1]['ok']
 assert get('/api/surface/workspaces',n['token'])[1]['ok']
+# Lodge serves the phone's complete Conductor document with bundled scripts
+# inlined. Healthy JSON APIs do not prove this page can render.
+req=urllib.request.Request('http://127.0.0.1:'+str(n['port'])+'/',headers={'X-Agentnode-Token':n['token']})
+with urllib.request.urlopen(req,timeout=10) as response:
+ assert response.status==200
+ html=response.read().decode()
+ assert '<html' in html.lower() and 'ConductorDelegations' in html
+ assert '<script src="/static/' not in html
 if os.environ['LODGE_ROLE']=='control':
  nodes=get('/api/control/tree',n['token'])[1]['nodes']
  assert sum(x.get('name')=='worker' and x.get('reachable',False) for x in nodes)==1
